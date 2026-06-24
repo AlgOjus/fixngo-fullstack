@@ -1,0 +1,6 @@
+{
+  "name": "FixNGo",
+  "description": "Hyperlocal problem solver allowing citizens and guests to report infrastructure bugs, featuring AI assessments and automated spatial deduplication.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
