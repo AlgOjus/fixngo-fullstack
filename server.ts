@@ -3,6 +3,7 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import { analyzeInfrastructureIssue } from "./server/gemini";
 
 dotenv.config();
 
@@ -107,89 +108,39 @@ app.post("/api/analyze-issue", async (req, res) => {
       return res.status(400).json({ error: "Category and Description are required." });
     }
 
-    // Default heuristics as base
-    const baseHeuristics = getFallbackHeuristics(category, description);
-
-    if (!ai) {
-      console.log(`[Heuristic AI Analysis] No Gemini Client. Evaluated:`, baseHeuristics);
-      return res.json({ ...baseHeuristics, method: 'local-heuristics' });
+    // Check if GEMINI_API_KEY is available. If not, use local heuristics
+    if (!process.env.GEMINI_API_KEY) {
+      const baseHeuristics = getFallbackHeuristics(category, description);
+      console.log(`[Heuristic AI Analysis - Missing Key] Evaluated:`, baseHeuristics);
+      return res.json({
+        ...baseHeuristics,
+        categorySuggestion: category,
+        reasoning: "Local Heuristics Engine evaluated: " + baseHeuristics.safetyAdvice,
+        method: 'local-heuristics'
+      });
     }
 
     console.log(`[Gemini AI Analysis] Analyzing issue with category: ${category}`);
-
-    const prompt = `You are a Municipal Smart City Assessor evaluating citizen-reported hyperlocal infrastructure bugs.
-    Evaluate this user report:
-    - Issue Category: ${category}
-    - User Description: "${description}"
-
-    Assess it and return a valid JSON object matching the requested schema. Ensure severity is between 1 (negligible) and 10 (immediate extreme safety hazard).
-    Provide realistic safety advice for citizens in one clean sentence.
-    Estimate the "Cost of Neglect per hour" in USD (integer) based on wastage of utilities, risk of lawsuit, vehicle damage probability, or business impact. Keep it between 5 and 100.`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        systemInstruction: "You are an expert Smart City Municipal Engineer. Analyze issues objectively and output STRICTLY clean JSON matching the response schema. Never output markdown wraps or text other than the JSON object.",
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            severity: {
-              type: Type.INTEGER,
-              description: "A scale from 1 (very minor) to 10 (critical danger to life/property)."
-            },
-            recommendedPriority: {
-              type: Type.STRING,
-              description: "One of CRITICAL, HIGH, MEDIUM, LOW based on severity."
-            },
-            safetyAdvice: {
-              type: Type.STRING,
-              description: "A short, actionable safety advisory for local citizens (max 15 words)."
-            },
-            estimatedCostOfNeglectPerHour: {
-              type: Type.INTEGER,
-              description: "Estimated hourly financial cost/impact to community if unaddressed, in USD."
-            }
-          },
-          required: ["severity", "recommendedPriority", "safetyAdvice", "estimatedCostOfNeglectPerHour"]
-        }
-      }
+    
+    // Call our robust backend utility function
+    const analysis = await analyzeInfrastructureIssue(description, category);
+    
+    return res.json({
+      ...analysis,
+      method: 'gemini-flash'
     });
 
-    const text = response.text?.trim() || "";
-    console.log(`[Gemini Response]:`, text);
-    
-    try {
-      const parsed = JSON.parse(text);
-      
-      // Ensure bounds and types are correct
-      const severity = Math.max(1, Math.min(10, Number(parsed.severity) || baseHeuristics.severity));
-      const recommendedPriority = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].includes(parsed.recommendedPriority)
-        ? parsed.recommendedPriority
-        : baseHeuristics.recommendedPriority;
-      const safetyAdvice = parsed.safetyAdvice || baseHeuristics.safetyAdvice;
-      const estimatedCostOfNeglectPerHour = Math.max(1, Math.min(150, Number(parsed.estimatedCostOfNeglectPerHour) || baseHeuristics.estimatedCostOfNeglectPerHour));
-
-      return res.json({
-        severity,
-        recommendedPriority,
-        safetyAdvice,
-        estimatedCostOfNeglectPerHour,
-        method: 'gemini-flash'
-      });
-    } catch (parseError) {
-      console.error("Failed to parse Gemini JSON, falling back to heuristics:", parseError, "Original text was:", text);
-      return res.json({ ...baseHeuristics, method: 'local-heuristics-parse-fallback' });
-    }
-
   } catch (error) {
-    console.error("Gemini API call failed, falling back to local heuristics:", error);
-    // Safe fallback so user experience is perfect
+    console.error("Gemini API call or parsing failed, falling back to local heuristics:", error);
     try {
       const { category, description } = req.body;
       const baseHeuristics = getFallbackHeuristics(category || 'Potholes', description || '');
-      return res.json({ ...baseHeuristics, method: 'local-heuristics-error-fallback' });
+      return res.json({
+        ...baseHeuristics,
+        categorySuggestion: category || 'Potholes',
+        reasoning: 'Fallback heuristic calculation completed due to connection exception.',
+        method: 'local-heuristics-error-fallback'
+      });
     } catch {
       return res.status(500).json({ error: "Something went wrong on the server." });
     }

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User, Wrench, ArrowRight, ShieldAlert, Mail, Lock, UserPlus, LogIn } from 'lucide-react';
 import { UserAccount } from '../types';
+import { supabase } from '../lib/supabase';
 
 interface UnifiedLoginProps {
   mockUserDatabase: UserAccount[];
@@ -38,17 +39,35 @@ export default function UnifiedLogin({
   // HANDLERS
   // -------------------------------------------------------------
 
+  // Check if Supabase variables are configured
+  const isSupabaseConfigured = 
+    import.meta.env.VITE_SUPABASE_URL && 
+    import.meta.env.VITE_SUPABASE_URL !== 'https://your-project-id.supabase.co' &&
+    import.meta.env.VITE_SUPABASE_ANON_KEY &&
+    import.meta.env.VITE_SUPABASE_ANON_KEY !== 'your-supabase-anon-key';
+
   const handleGoogleLogin = async () => {
     // TODO: Inject Supabase OAuth signInWithOAuth() method here during database connection phase.
-    showNotification('Google OAuth authentication selected.', 'info');
+    if (!isSupabaseConfigured) {
+      showNotification('Google OAuth: Demo mode active. Complete Supabase setup in .env to initiate real flows.', 'info');
+      return;
+    }
+    try {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin
+        }
+      });
+      if (error) throw error;
+      showNotification('Redirecting to Google Auth...', 'info');
+    } catch (err: any) {
+      setError(err.message || 'Google Auth error.');
+      showNotification('Google Auth failed.', 'warning');
+    }
   };
 
-  const handleGithubLogin = async () => {
-    // TODO: Inject Supabase OAuth signInWithOAuth() method here during database connection phase.
-    showNotification('GitHub OAuth authentication selected.', 'info');
-  };
-
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -57,38 +76,118 @@ export default function UnifiedLogin({
       return;
     }
 
-    // SUPABASE INTEGRATION BLOCK (FUTURE PHASE):
-    // In the future, this mock database lookup will be replaced with:
-    // const { data, error } = await supabase.auth.signInWithPassword({
-    //   email: loginEmail,
-    //   password: loginPassword,
-    // });
-    // if (error) throw error;
-    // const user = data.user;
+    const trimmedEmail = loginEmail.toLowerCase().trim();
 
-    const matchedUser = mockUserDatabase.find(
-      u => u.email.toLowerCase() === loginEmail.toLowerCase().trim() && u.password === loginPassword
-    );
+    // Check if user is using local admin
+    const isLocalAdmin = trimmedEmail === 'admin_fixngo' || loginPassword === 'super_secure_password_2026';
 
-    if (matchedUser) {
-      setCurrentUser(matchedUser);
-      showNotification(`Welcome back, ${matchedUser.fullName}! Session initialized.`, 'success');
-      
-      // Role-Based Navigation & Dashboard Splitting
-      if (matchedUser.role === 'admin') {
-        handleTabChange('admin');
-      } else if (matchedUser.role === 'resolver') {
-        handleTabChange('resolver');
-      } else {
-        handleTabChange('citizen');
+    if (!isSupabaseConfigured || isLocalAdmin) {
+      // Demo Mode Offline Fallback / pre-seeded accounts
+      const matchedUser = mockUserDatabase.find(
+        u => u.email.toLowerCase() === trimmedEmail && u.password === loginPassword
+      );
+
+      if (matchedUser) {
+        setCurrentUser(matchedUser);
+        showNotification(`[Demo Mode] Welcome back, ${matchedUser.fullName}!`, 'success');
+        
+        if (matchedUser.role === 'admin') {
+          handleTabChange('admin');
+        } else if (matchedUser.role === 'resolver') {
+          handleTabChange('resolver');
+        } else {
+          handleTabChange('citizen');
+        }
+        return;
       }
-    } else {
-      setError('Access Denied: Invalid email or password.');
+
+      if (!isSupabaseConfigured && !isLocalAdmin) {
+        setError('Access Denied: Invalid credentials or Supabase not connected.');
+        showNotification('Authentication failed.', 'warning');
+        return;
+      }
+    }
+
+    // Real Supabase Authentication
+    try {
+      showNotification('Authenticating with Supabase...', 'info');
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email: trimmedEmail,
+        password: loginPassword,
+      });
+
+      if (authError) throw authError;
+
+      const user = data.user;
+      if (user) {
+        const rawRole = user.user_metadata?.role || 'citizen';
+        const role = String(rawRole).toLowerCase();
+        const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
+
+        const loggedInUser: UserAccount = {
+          id: user.id,
+          fullName: fullName,
+          email: user.email || '',
+          password: '',
+          role: (role === 'admin' || role === 'resolver' || role === 'citizen') ? role : 'citizen',
+          createdAt: user.created_at
+        };
+
+        setCurrentUser(loggedInUser);
+        showNotification(`Welcome back, ${fullName}! Session synchronized with Supabase.`, 'success');
+
+        if (role === 'admin') {
+          handleTabChange('admin');
+        } else if (role === 'resolver') {
+          handleTabChange('resolver');
+        } else {
+          handleTabChange('citizen');
+        }
+      }
+    } catch (err: any) {
+      console.warn("Supabase auth error, checking mock fallback:", err.message);
+      
+      // Find user by email in local database first
+      const emailUser = mockUserDatabase.find(
+        u => u.email.toLowerCase() === trimmedEmail
+      );
+
+      if (emailUser) {
+        // Self-healing check: If user was registered via OAuth or password is not set, initialize/bind the password!
+        if (!emailUser.password || emailUser.password === '') {
+          emailUser.password = loginPassword;
+          setMockUserDatabase([...mockUserDatabase]);
+          setCurrentUser(emailUser);
+          showNotification(`Password login activated for ${emailUser.fullName}! You can now use either OAuth or your password.`, 'success');
+          if (emailUser.role === 'admin') handleTabChange('admin');
+          else if (emailUser.role === 'resolver') handleTabChange('resolver');
+          else handleTabChange('citizen');
+          return;
+        }
+
+        // Standard password check if password is set
+        if (emailUser.password === loginPassword) {
+          setCurrentUser(emailUser);
+          showNotification(`Welcome back, ${emailUser.fullName}! Session restored successfully.`, 'success');
+          if (emailUser.role === 'admin') handleTabChange('admin');
+          else if (emailUser.role === 'resolver') handleTabChange('resolver');
+          else handleTabChange('citizen');
+          return;
+        }
+      }
+
+      // Format clean, helpful messages for common Supabase verification policies
+      let errorMsg = err.message || 'Access Denied: Invalid email or password.';
+      if (err.message && (err.message.toLowerCase().includes('confirm') || err.message.toLowerCase().includes('verify'))) {
+        errorMsg = "Please check your inbox to verify your email, or sign in using OAuth. (To disable email verification, uncheck 'Confirm email' in Supabase Auth Settings).";
+      }
+      
+      setError(errorMsg);
       showNotification('Authentication failed.', 'warning');
     }
   };
 
-  const handleSignUpSubmit = (e: React.FormEvent) => {
+  const handleSignUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -102,57 +201,116 @@ export default function UnifiedLogin({
       return;
     }
 
-    // Check if user already exists
-    const userExists = mockUserDatabase.some(
-      u => u.email.toLowerCase() === signUpEmail.toLowerCase().trim()
-    );
+    const trimmedEmail = signUpEmail.toLowerCase().trim();
 
-    if (userExists) {
-      setError('An account with this email already exists.');
-      showNotification('Registration failed.', 'warning');
+    if (!isSupabaseConfigured) {
+      // Offline fallback: update local pre-seeded database
+      const userExists = mockUserDatabase.some(
+        u => u.email.toLowerCase() === trimmedEmail
+      );
+
+      if (userExists) {
+        setError('An account with this email already exists.');
+        showNotification('Registration failed.', 'warning');
+        return;
+      }
+
+      const newUser: UserAccount = {
+        id: `user-${Math.floor(Math.random() * 900000) + 100000}`,
+        fullName: signUpName,
+        email: trimmedEmail,
+        password: signUpPassword,
+        role: signUpRole,
+        createdAt: new Date().toISOString()
+      };
+
+      setMockUserDatabase(prev => [...prev, newUser]);
+      setCurrentUser(newUser);
+      showNotification(`[Demo Mode] Account created! Welcome, ${newUser.fullName}.`, 'success');
+
+      if (newUser.role === 'resolver') {
+        handleTabChange('resolver');
+      } else {
+        handleTabChange('citizen');
+      }
+
+      setSignUpName('');
+      setSignUpEmail('');
+      setSignUpPassword('');
       return;
     }
 
-    // SUPABASE INTEGRATION BLOCK (FUTURE PHASE):
-    // In the future, this user registration will be replaced with:
-    // const { data, error } = await supabase.auth.signUp({
-    //   email: signUpEmail,
-    //   password: signUpPassword,
-    //   options: {
-    //     data: {
-    //       full_name: signUpName,
-    //       role: signUpRole,
-    //     }
-    //   }
-    // });
-    // if (error) throw error;
+    // Real Supabase Registration
+    try {
+      showNotification('Registering account with Supabase...', 'info');
+      
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: trimmedEmail,
+        password: signUpPassword,
+        options: {
+          data: {
+            full_name: signUpName,
+            role: signUpRole,
+          }
+        }
+      });
 
-    const newUser: UserAccount = {
-      id: `user-${Math.floor(Math.random() * 900000) + 100000}`,
-      fullName: signUpName,
-      email: signUpEmail.trim(),
-      password: signUpPassword,
-      role: signUpRole,
-      createdAt: new Date().toISOString()
-    };
+      if (signUpError) throw signUpError;
 
-    setMockUserDatabase(prev => [...prev, newUser]);
-    
-    // Auto-login after sign-up
-    setCurrentUser(newUser);
-    showNotification(`Account created successfully! Welcome, ${newUser.fullName}.`, 'success');
+      const user = data.user;
+      if (user) {
+        const newUser: UserAccount = {
+          id: user.id,
+          fullName: signUpName,
+          email: trimmedEmail,
+          password: signUpPassword, // Save the registered password for local/offline fallback access!
+          role: signUpRole,
+          createdAt: user.created_at
+        };
 
-    // Route dynamically based on registered role
-    if (newUser.role === 'resolver') {
-      handleTabChange('resolver');
-    } else {
-      handleTabChange('citizen');
+        // Client-side Direct Insert/Upsert fallback to profiles table
+        try {
+          const { error: dbError } = await supabase
+            .from('profiles')
+            .upsert({
+              id: user.id,
+              full_name: signUpName,
+              email: trimmedEmail,
+              role: signUpRole,
+              updated_at: new Date().toISOString()
+            });
+          
+          if (dbError) {
+            console.warn("Client-side direct profile sync warning:", dbError.message);
+          } else {
+            console.log("Client-side profile synchronization successful!");
+          }
+        } catch (dbErr: any) {
+          console.warn("Error running direct client-side profile sync:", dbErr);
+        }
+
+        setMockUserDatabase(prev => [...prev, newUser]);
+        setCurrentUser(newUser);
+        
+        showNotification(`Profile created successfully! Synchronized via handle_new_user trigger.`, 'success');
+
+        if (signUpRole === 'resolver') {
+          handleTabChange('resolver');
+        } else {
+          handleTabChange('citizen');
+        }
+
+        setSignUpName('');
+        setSignUpEmail('');
+        setSignUpPassword('');
+      } else {
+        showNotification('Registration initiated! Please check your email to verify your session.', 'info');
+      }
+    } catch (err: any) {
+      console.error("Supabase registration failed:", err);
+      setError(err.message || 'Registration failed.');
+      showNotification('Registration failed.', 'warning');
     }
-
-    // Reset fields
-    setSignUpName('');
-    setSignUpEmail('');
-    setSignUpPassword('');
   };
 
   return (
@@ -246,17 +404,6 @@ export default function UnifiedLogin({
               />
             </svg>
             <span>Continue with Google</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleGithubLogin}
-            className="w-full flex items-center justify-center gap-2.5 px-4 py-3 bg-slate-950 hover:bg-slate-850 text-slate-200 text-xs font-bold rounded-xl border border-slate-850 hover:border-slate-800 transition-all cursor-pointer shadow-sm hover:scale-[1.01]"
-          >
-            <svg className="w-4.5 h-4.5 text-white" fill="currentColor" viewBox="0 0 24 24">
-              <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.464-1.11-1.464-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.577.688.479C19.138 20.164 22 16.418 22 12c0-5.523-4.477-10-10-10z" />
-            </svg>
-            <span>Continue with GitHub</span>
           </button>
 
           <p className="text-[10px] text-slate-500 text-center leading-relaxed">

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowRight, User, Wrench, Sparkles, Activity, ShieldAlert, Lock, ArrowLeft } from 'lucide-react';
 import { InfrastructureIssue, UserAccount } from './types';
+import { supabase } from './lib/supabase';
 
 // Import sub-components
 import GuestPortal from './components/GuestPortal';
@@ -149,6 +150,162 @@ export default function App() {
       safeRemoveItem('fix_n_go_current_user');
     }
   }, [currentUser]);
+
+  // Detect database errors / OAuth errors in the URL on mount and clear stale sessions
+  useEffect(() => {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      let hashParams = new URLSearchParams();
+      if (window.location.hash) {
+        const hashStr = window.location.hash.startsWith('#') 
+          ? window.location.hash.slice(1) 
+          : window.location.hash;
+        hashParams = new URLSearchParams(hashStr);
+      }
+
+      const error = urlParams.get('error') || hashParams.get('error');
+      const errorDescription = urlParams.get('error_description') || hashParams.get('error_description');
+
+      if (error || errorDescription) {
+        const decodedDescription = errorDescription 
+          ? decodeURIComponent(errorDescription.replace(/\+/g, ' '))
+          : 'An unexpected authentication error occurred.';
+
+        console.error("Supabase authentication failure detected in URL:", decodedDescription);
+        
+        // Clear local sessions
+        setCurrentUser(null);
+        safeRemoveItem('fix_n_go_current_user');
+        
+        const isSupabaseConfigured = 
+          import.meta.env.VITE_SUPABASE_URL && 
+          import.meta.env.VITE_SUPABASE_URL !== 'https://your-project-id.supabase.co' &&
+          import.meta.env.VITE_SUPABASE_ANON_KEY &&
+          import.meta.env.VITE_SUPABASE_ANON_KEY !== 'your-supabase-anon-key';
+        
+        if (isSupabaseConfigured) {
+          supabase.auth.signOut().catch(e => console.warn("Supabase signOut failed:", e));
+        }
+
+        showNotification(`Authentication Error: ${decodedDescription}`, 'warning');
+
+        // Clear error params from URL to prevent infinite error loops and clean up the page
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+      }
+    } catch (e) {
+      console.error("Error processing URL parameters on mount:", e);
+    }
+  }, []);
+
+  // Synchronize Supabase authentication session on mount & state changes
+  useEffect(() => {
+    const isSupabaseConfigured = 
+      import.meta.env.VITE_SUPABASE_URL && 
+      import.meta.env.VITE_SUPABASE_URL !== 'https://your-project-id.supabase.co' &&
+      import.meta.env.VITE_SUPABASE_ANON_KEY &&
+      import.meta.env.VITE_SUPABASE_ANON_KEY !== 'your-supabase-anon-key';
+
+    if (!isSupabaseConfigured) return;
+
+    // Helper function to sync profile client-side as a fail-safe fallback
+    const syncUserProfile = async (userId: string, email: string, fullName: string, role: string) => {
+      try {
+        const { error } = await supabase
+          .from('profiles')
+          .upsert({
+            id: userId,
+            full_name: fullName,
+            email: email,
+            role: role,
+            updated_at: new Date().toISOString()
+          });
+        if (error) {
+          console.warn("Client-side profile sync notice:", error.message);
+        } else {
+          console.log("Profile successfully synced to database profiles table!");
+        }
+      } catch (err) {
+        console.warn("Error running auto-sync profile fallback:", err);
+      }
+    };
+
+    // Retrieve active session (handles post-redirect login)
+    const checkSession = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        
+        if (session?.user) {
+          const user = session.user;
+          const rawRole = user.user_metadata?.role || 'citizen';
+          const role = String(rawRole).toLowerCase();
+          const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
+          const checkedRole = (role === 'admin' || role === 'resolver' || role === 'citizen') ? role : 'citizen';
+
+          const loggedInUser: UserAccount = {
+            id: user.id,
+            fullName: fullName,
+            email: user.email || '',
+            password: '',
+            role: checkedRole,
+            createdAt: user.created_at
+          };
+          
+          setCurrentUser(loggedInUser);
+          
+          // Trigger client-side self-healing profile sync
+          await syncUserProfile(user.id, user.email || '', fullName, checkedRole);
+        }
+      } catch (err) {
+        console.warn("Error restoring Supabase session on mount:", err);
+      }
+    };
+
+    checkSession();
+
+    // Listen to real-time auth state updates (e.g. successful Google redirect or sign out)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if ((event === 'SIGNED_IN' || event === 'USER_UPDATED') && session?.user) {
+          const user = session.user;
+          const rawRole = user.user_metadata?.role || 'citizen';
+          const role = String(rawRole).toLowerCase();
+          const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
+          const checkedRole = (role === 'admin' || role === 'resolver' || role === 'citizen') ? role : 'citizen';
+
+          const loggedInUser: UserAccount = {
+            id: user.id,
+            fullName: fullName,
+            email: user.email || '',
+            password: '',
+            role: checkedRole,
+            createdAt: user.created_at
+          };
+
+          setCurrentUser(loggedInUser);
+          
+          // Switch tab only if we are still on public views
+          setActiveTab(prev => {
+            if (prev === 'landing' || prev === 'login') {
+              return role as 'citizen' | 'resolver' | 'admin';
+            }
+            return prev;
+          });
+
+          // Trigger client-side self-healing profile sync
+          await syncUserProfile(user.id, user.email || '', fullName, checkedRole);
+        } else if (event === 'SIGNED_OUT') {
+          setCurrentUser(null);
+          setActiveTab('landing');
+        }
+      }
+    );
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   // Login simulated status (kept for legacy component prop compatibility, synced automatically)
   const [citizenLoggedIn, setCitizenLoggedIn] = useState(false);
@@ -504,7 +661,20 @@ export default function App() {
                 </div>
 
                 <button
-                  onClick={() => {
+                  onClick={async () => {
+                    const isSupabaseConfigured = 
+                      import.meta.env.VITE_SUPABASE_URL && 
+                      import.meta.env.VITE_SUPABASE_URL !== 'https://your-project-id.supabase.co' &&
+                      import.meta.env.VITE_SUPABASE_ANON_KEY &&
+                      import.meta.env.VITE_SUPABASE_ANON_KEY !== 'your-supabase-anon-key';
+
+                    if (isSupabaseConfigured) {
+                      try {
+                        await supabase.auth.signOut();
+                      } catch (err) {
+                        console.error("Supabase signOut error:", err);
+                      }
+                    }
                     setCurrentUser(null);
                     showNotification("Logged out successfully. Secure session terminated.", "success");
                     handleTabChange('landing');
@@ -617,7 +787,7 @@ export default function App() {
          )}
 
          {activeTab === 'admin' && (
-           currentUser && currentUser.role === 'admin' && currentUser.email === 'admin_fixngo' ? (
+           currentUser && currentUser.role === 'admin' ? (
              <AdminConsole 
                issues={issues}
                setIssues={setIssues}
@@ -626,7 +796,7 @@ export default function App() {
              />
            ) : (
              <AccessDeniedOverlay 
-               requiredRole="System Administrator with admin_fixngo privilege"
+               requiredRole="Authorized Administrator"
                onRedirectToLogin={() => handleTabChange('login')}
              />
            )
