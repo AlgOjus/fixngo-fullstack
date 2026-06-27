@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Navigation, Wrench, CheckCircle, Navigation2, FileText, Sparkles, Upload } from 'lucide-react';
 import { InfrastructureIssue } from '../types';
+import ResolverDashboard from './ResolverDashboard';
+import OperationalMap from './OperationalMap';
 
 interface ResolversPortalProps {
   issues: InfrastructureIssue[];
@@ -22,10 +24,37 @@ export default function ResolversPortal({
   setResolutionNotes
 }: ResolversPortalProps) {
 
-  const activeDispatches = issues.filter(iss => iss.status !== 'RESOLVED');
-  const completedDispatches = issues.filter(iss => iss.status === 'RESOLVED');
+  const activeDispatches = issues
+    .filter(iss => iss.status !== 'Resolved' && (iss.status as any) !== 'RESOLVED')
+    .map(iss => {
+      let status: 'Pending' | 'In Progress' | 'Resolved' = 'Pending';
+      if (iss.status === 'Resolved' || (iss.status as any) === 'RESOLVED') {
+        status = 'Resolved';
+      } else if (iss.status === 'In Progress' || (iss.status as any) === 'ASSIGNED' || (iss.status as any) === 'Requires Review') {
+        status = 'In Progress';
+      }
 
-  const [activeTab, setActiveTab] = useState<'active' | 'completed'>('active');
+      let aiScore = (iss.severity * 10) + (iss.precedence * 2.5);
+      if (status === 'Resolved') {
+        aiScore -= 100;
+      } else if (status === 'In Progress') {
+        if (iss.resolution_feedback) {
+          aiScore += 25;
+        } else {
+          aiScore += 10;
+        }
+      }
+      return { ...iss, status, aiScore: Math.round(aiScore) };
+    })
+    .sort((a, b) => b.aiScore - a.aiScore);
+
+  const completedDispatches = issues
+    .filter(iss => iss.status === 'Resolved' || (iss.status as any) === 'RESOLVED')
+    .map(iss => {
+      return { ...iss, status: 'Resolved' as const, aiScore: Math.round((iss.severity * 10) + (iss.precedence * 2.5) - 100) };
+    });
+
+  const [activeTab, setActiveTab] = useState<'dispatch' | 'active' | 'completed'>('dispatch');
 
   return (
     <div className="space-y-6 animate-fade-in text-slate-200">
@@ -46,6 +75,12 @@ export default function ResolversPortal({
       {/* Sub tabs inside Resolvers Hub */}
       <div className="flex border-b border-slate-900 pb-px text-xs font-semibold gap-4">
         <button
+          onClick={() => setActiveTab('dispatch')}
+          className={`pb-3 border-b-2 transition-all cursor-pointer ${activeTab === 'dispatch' ? 'border-emerald-500 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+        >
+          Smart Dispatch Feed (Live)
+        </button>
+        <button
           onClick={() => setActiveTab('active')}
           className={`pb-3 border-b-2 transition-all cursor-pointer ${activeTab === 'active' ? 'border-emerald-500 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
         >
@@ -59,7 +94,18 @@ export default function ResolversPortal({
         </button>
       </div>
 
-      {activeTab === 'active' ? (
+      {activeTab === 'dispatch' ? (
+        <div className="space-y-6">
+          <ResolverDashboard onIssueDispatched={(id) => {
+            setActiveTab('active');
+          }} />
+          <OperationalMap 
+            issues={issues} 
+            showNotification={undefined} 
+            title="AUTHORIZED RESOLVER DISPATCH MAP" 
+          />
+        </div>
+      ) : activeTab === 'active' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {activeDispatches.length === 0 ? (
             <div className="col-span-2 text-center py-16 bg-slate-900 border border-slate-800 rounded-2xl">
@@ -67,16 +113,19 @@ export default function ResolversPortal({
             </div>
           ) : (
             activeDispatches.map(issue => {
-              const isAssigned = issue.status === 'ASSIGNED';
+              const isAssigned = issue.status === 'In Progress';
               return (
                 <div key={issue.id} className="bg-slate-900 border border-slate-850 rounded-2xl p-5 space-y-4 shadow-lg flex flex-col justify-between">
                   <div className="space-y-4">
                     <div className="flex justify-between items-start">
                       <div>
                         <span className={`px-2 py-0.5 rounded text-[9px] font-bold tracking-wider uppercase mb-2 inline-block ${
-                          isAssigned ? 'bg-amber-500/20 text-amber-400' : 'bg-rose-500/20 text-rose-400'
+                          issue.status === 'In Progress' && issue.resolution_feedback ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' :
+                          issue.status === 'In Progress' ? 'bg-amber-500/20 text-amber-400' :
+                          'bg-rose-500/20 text-rose-400 border border-rose-500/30'
                         }`}>
-                          {isAssigned ? 'ASSIGNED TO UNIT #442' : 'MUNICIPAL BROADCAST'}
+                          {issue.status === 'In Progress' && issue.resolution_feedback ? 'REPAIR REJECTED - REQUIRES REVIEW' :
+                           issue.status === 'In Progress' ? 'DISPATCH IN PROGRESS' : 'MUNICIPAL BROADCAST'}
                         </span>
                         <h3 className="text-md font-bold text-white">{issue.category}</h3>
                         <p className="text-xs text-slate-400">AI Severity Score: {issue.severity}/10</p>
@@ -93,6 +142,13 @@ export default function ResolversPortal({
                         <div className="absolute inset-0 flex items-center justify-center text-slate-600 font-mono text-xs">No issue photo attached</div>
                       )}
                     </div>
+
+                    {issue.resolution_feedback && (
+                      <div className="bg-rose-950/20 border border-rose-900/30 rounded-xl p-3 text-[11px] text-rose-400 leading-relaxed">
+                        <span className="font-bold block uppercase tracking-wider text-[9px] mb-1">QA Inspector Rejection Reasoning:</span>
+                        "{issue.resolution_feedback}"
+                      </div>
+                    )}
 
                     {issue.aiAdvice && (
                       <div className="bg-slate-950 rounded-xl p-3 border border-slate-850 text-[11px] text-orange-400 leading-relaxed italic">

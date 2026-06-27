@@ -27,9 +27,9 @@ export default function AdminConsole({ issues, setIssues, showNotification, bypa
     }
   };
 
-  const handleOverrideStatus = (id: string, newStatus: 'RESOLVED' | 'BROADCAST') => {
+  const handleOverrideStatus = (id: string, newStatus: 'Pending' | 'In Progress' | 'Resolved') => {
     setIssues(prev => prev.map(issue => 
-      issue.id === id ? { ...issue, status: newStatus, workerNotes: newStatus === 'RESOLVED' ? 'Administrative Overridden Resolution' : undefined } : issue
+      issue.id === id ? { ...issue, status: newStatus, workerNotes: newStatus === 'Resolved' ? 'Administrative Overridden Resolution' : undefined } : issue
     ));
     showNotification(`Administrative Override triggered for ticket ${id}: Status set to ${newStatus}`, 'success');
   };
@@ -108,7 +108,28 @@ export default function AdminConsole({ issues, setIssues, showNotification, bypa
     );
   }
 
-  const activeCount = issues.filter(i => i.status !== 'RESOLVED').length;
+  const sortedIssues = [...issues].map(iss => {
+    let status: 'Pending' | 'In Progress' | 'Resolved' = 'Pending';
+    if (iss.status === 'Resolved' || (iss.status as any) === 'RESOLVED') {
+      status = 'Resolved';
+    } else if (iss.status === 'In Progress' || (iss.status as any) === 'ASSIGNED' || (iss.status as any) === 'Requires Review') {
+      status = 'In Progress';
+    }
+
+    let aiScore = (iss.severity * 10) + (iss.precedence * 2.5);
+    if (status === 'Resolved') {
+      aiScore -= 100;
+    } else if (status === 'In Progress') {
+      if (iss.resolution_feedback) {
+        aiScore += 25;
+      } else {
+        aiScore += 10;
+      }
+    }
+    return { ...iss, status, aiScore: Math.round(aiScore) };
+  }).sort((a, b) => b.aiScore - a.aiScore);
+
+  const activeCount = issues.filter(i => i.status !== 'Resolved' && (i.status as any) !== 'RESOLVED').length;
   const costOfNeglect = (activeCount * 1420.50).toLocaleString('en-IN', { style: 'currency', currency: 'INR' });
 
   return (
@@ -177,30 +198,34 @@ export default function AdminConsole({ issues, setIssues, showNotification, bypa
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/40 text-slate-300">
-                {issues.map(issue => (
+                {sortedIssues.map(issue => (
                   <tr key={issue.id} className="hover:bg-slate-800/20">
                     <td className="py-3 font-mono text-slate-400">{issue.id}</td>
                     <td className="py-3 font-bold">{issue.category}</td>
                     <td className="py-3">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        issue.status === 'RESOLVED' ? 'bg-emerald-500/10 text-emerald-400' :
-                        issue.status === 'ASSIGNED' ? 'bg-amber-500/10 text-amber-400' : 'bg-rose-500/10 text-rose-400'
+                        issue.status === 'Resolved' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                        issue.status === 'In Progress' && issue.resolution_feedback ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' :
+                        issue.status === 'In Progress' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
+                        'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                       }`}>
-                        {issue.status}
+                        {issue.status === 'In Progress' && issue.resolution_feedback ? 'Rejected' : issue.status}
                       </span>
                     </td>
-                    <td className="py-3">{issue.severity}/10</td>
+                    <td className="py-3 font-mono">
+                      {issue.severity}/10 <span className="text-[10px] text-indigo-400 font-bold">({issue.aiScore} pts)</span>
+                    </td>
                     <td className="py-3 text-right space-x-1.5">
-                      {issue.status !== 'RESOLVED' ? (
+                      {issue.status !== 'Resolved' ? (
                         <button 
-                          onClick={() => handleOverrideStatus(issue.id, 'RESOLVED')}
+                          onClick={() => handleOverrideStatus(issue.id, 'Resolved')}
                           className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded text-[10px] font-bold hover:bg-emerald-500/20 transition cursor-pointer"
                         >
                           Resolve
                         </button>
                       ) : (
                         <button 
-                          onClick={() => handleOverrideStatus(issue.id, 'BROADCAST')}
+                          onClick={() => handleOverrideStatus(issue.id, 'Pending')}
                           className="bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-1 rounded text-[10px] font-bold hover:bg-rose-500/20 transition cursor-pointer"
                         >
                           Reopen

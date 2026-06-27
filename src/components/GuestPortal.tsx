@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Compass, Sparkles, User, Wrench, ArrowRight, Activity, ClipboardList, Building, AlertTriangle, Send } from 'lucide-react';
 import { InfrastructureIssue } from '../types';
+import InteractiveMap from './InteractiveMap';
+import OperationalMap from './OperationalMap';
 
 interface GuestPortalProps {
   issues: InfrastructureIssue[];
@@ -16,9 +18,12 @@ interface GuestPortalProps {
   setNewIssueDescription: (val: string) => void;
   uploadedImage: string;
   setUploadedImage: (val: string) => void;
+  uploadedFile: File | null;
+  setUploadedFile: (val: File | null) => void;
   handleTabChange: (tab: 'landing' | 'login' | 'citizen' | 'resolver' | 'admin') => void;
   citizenLoggedIn: boolean;
   resolverLoggedIn: boolean;
+  showNotification?: (msg: string, type?: string) => void;
 }
 
 export default function GuestPortal({
@@ -35,9 +40,12 @@ export default function GuestPortal({
   setNewIssueDescription,
   uploadedImage,
   setUploadedImage,
+  uploadedFile,
+  setUploadedFile,
   handleTabChange,
   citizenLoggedIn,
-  resolverLoggedIn
+  resolverLoggedIn,
+  showNotification
 }: GuestPortalProps) {
 
   // GPS Simulation Trigger
@@ -50,8 +58,33 @@ export default function GuestPortal({
     setNewIssueLng(lngs[idx]);
   };
 
-  const activeCount = issues.filter(i => i.status !== 'RESOLVED').length;
+  const activeCount = issues.filter(i => i.status !== 'Resolved' && (i.status as any) !== 'RESOLVED').length;
   const costOfNeglect = (activeCount * 1420.50).toLocaleString('en-IN', { style: 'currency', currency: 'INR' });
+
+  const mapCenter: [number, number] = issues.length > 0 
+    ? [issues[0].lat, issues[0].lng]
+    : [28.6139, 77.2090];
+
+  const sortedIssues = [...issues].map(iss => {
+    let status: 'Pending' | 'In Progress' | 'Resolved' = 'Pending';
+    if (iss.status === 'Resolved' || (iss.status as any) === 'RESOLVED') {
+      status = 'Resolved';
+    } else if (iss.status === 'In Progress' || (iss.status as any) === 'ASSIGNED' || (iss.status as any) === 'Requires Review') {
+      status = 'In Progress';
+    }
+
+    let aiScore = (iss.severity * 10) + (iss.precedence * 2.5);
+    if (status === 'Resolved') {
+      aiScore -= 100;
+    } else if (status === 'In Progress') {
+      if (iss.resolution_feedback) {
+        aiScore += 25;
+      } else {
+        aiScore += 10;
+      }
+    }
+    return { ...iss, status, aiScore: Math.round(aiScore) };
+  }).sort((a, b) => b.aiScore - a.aiScore);
 
   return (
     <div className="space-y-12 text-slate-200">
@@ -107,53 +140,7 @@ export default function GuestPortal({
         <div className="lg:col-span-2 space-y-8">
           
           {/* Live Telemetry Map Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 h-96 relative overflow-hidden flex flex-col items-center justify-center shadow-xl">
-            <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, rgba(255,255,255,0.15) 1px, transparent 0)', backgroundSize: '24px 24px' }}></div>
-            
-            <div className="absolute top-4 left-4 bg-slate-950/90 border border-slate-850 px-3 py-1.5 rounded-full text-[9px] font-mono text-slate-400 tracking-wider flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-orange-500 animate-ping"></span>
-              <span>HYPERLOCAL OPERATION GRID MONITOR</span>
-            </div>
-
-            {/* Map Pins */}
-            {issues.map((iss) => {
-              const isResolved = iss.status === 'RESOLVED';
-              const isAssigned = iss.status === 'ASSIGNED';
-              const pinColor = isResolved ? 'bg-emerald-500' : isAssigned ? 'bg-orange-500' : 'bg-rose-500';
-              
-              const leftPos = `${25 + (iss.lng % 0.010) * 5500}%`;
-              const topPos = `${30 + (iss.lat % 0.010) * 4500}%`;
-
-              return (
-                <div 
-                  key={iss.id} 
-                  style={{ left: leftPos, top: topPos }}
-                  className="absolute group cursor-pointer"
-                >
-                  <div className={`w-3.5 h-3.5 ${pinColor} rounded-full border border-slate-950 shadow-md transform transition-transform duration-150 hover:scale-130`}></div>
-                  
-                  {/* Tooltip Hover Overlay */}
-                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-slate-950 border border-slate-800 p-2.5 rounded-xl shadow-2xl w-48 text-[11px] pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                    <span className="text-[9px] text-orange-400 font-extrabold uppercase block mb-0.5">AI Severity: {iss.severity}</span>
-                    <strong className="text-white block font-semibold">{iss.category}</strong>
-                    <span className="text-slate-400 font-mono text-[9px] block">Status: {iss.status}</span>
-                    <span className="text-slate-400 font-mono text-[9px] block">Precedence: +{iss.precedence} logs</span>
-                  </div>
-                </div>
-              );
-            })}
-
-            {/* Visual landmarks */}
-            <div className="absolute bottom-4 right-4 bg-slate-950/95 border border-slate-850 px-3 py-2 rounded-xl text-[9px] font-mono text-slate-400 text-right space-y-1">
-              <div className="flex items-center gap-1 justify-end"><Building className="w-3 h-3 text-indigo-400" /> Central Metro Junction</div>
-              <div className="flex items-center gap-1 justify-end"><Building className="w-3 h-3 text-emerald-400" /> Kalyan Town Green</div>
-            </div>
-
-            <div className="text-center p-5 bg-slate-950/80 border border-slate-850 rounded-2xl max-w-sm pointer-events-none z-10">
-              <span className="text-xs text-orange-500 font-extrabold tracking-widest uppercase block mb-1">Live Telemetry Map</span>
-              <p className="text-[11px] text-slate-300">Clicking coordinates on smart map activates real-time deduplication to speed up municipal dispatches.</p>
-            </div>
-          </div>
+          <OperationalMap issues={issues} showNotification={showNotification} />
 
           {/* Active Infrastructure Ledger */}
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
@@ -180,7 +167,7 @@ export default function GuestPortal({
                   </tr>
                 </thead>
                 <tbody className="text-slate-300 divide-y divide-slate-800/40">
-                  {issues.map(issue => (
+                  {sortedIssues.map(issue => (
                     <tr key={issue.id} className="hover:bg-slate-800/20 transition-colors">
                       <td className="py-3 font-mono text-slate-400 text-[11px]">{issue.id}</td>
                       <td className="py-3 font-bold text-white">{issue.category}</td>
@@ -192,11 +179,17 @@ export default function GuestPortal({
                       </td>
                       <td className="py-3">
                         <span className="flex items-center gap-1.5 text-[10px] font-bold">
-                          <span className={`w-2 h-2 rounded-full ${issue.status === 'BROADCAST' ? 'bg-rose-500 animate-pulse' : issue.status === 'ASSIGNED' ? 'bg-orange-400' : 'bg-emerald-500'}`}></span>
-                          {issue.status}
+                          <span className={`w-2 h-2 rounded-full ${
+                            issue.status === 'Resolved' ? 'bg-emerald-500' : 
+                            issue.status === 'In Progress' ? 'bg-amber-500' : 
+                            'bg-rose-500 animate-pulse'
+                          }`}></span>
+                          {issue.status === 'In Progress' && issue.resolution_feedback ? 'Rejected' : issue.status}
                         </span>
                       </td>
-                      <td className="py-3 text-slate-400 font-mono">+{issue.precedence} logs</td>
+                      <td className="py-3 text-slate-400 font-mono">
+                        +{issue.precedence} logs <span className="text-[10px] text-indigo-400">({issue.aiScore} pts)</span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -232,6 +225,7 @@ export default function GuestPortal({
                         onChange={(e) => {
                           const file = e.target.files?.[0];
                           if (file) {
+                            setUploadedFile(file);
                             const reader = new FileReader();
                             reader.onloadend = () => {
                               setUploadedImage(reader.result as string);
@@ -263,21 +257,16 @@ export default function GuestPortal({
 
               {/* Coordinates & GPS */}
               <div>
-                <label className="block text-[11px] font-bold text-slate-400 mb-1">Grid Coordinates</label>
-                <div className="flex gap-2">
-                  <input 
-                    type="text" 
-                    value={`${newIssueLat}, ${newIssueLng}`}
-                    readOnly
-                    className="bg-slate-950 border border-slate-850 text-slate-400 text-xs rounded-xl block w-full p-3 font-mono outline-none"
-                  />
-                  <button 
-                    onClick={handleGPSLocate}
-                    className="bg-slate-800 hover:bg-slate-750 border border-slate-700 text-orange-500 px-3 py-2 rounded-xl text-[11px] font-bold transition-colors cursor-pointer shrink-0"
-                  >
-                    Simulate GPS
-                  </button>
-                </div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-2">Issue Location Pin</label>
+                <InteractiveMap 
+                  lat={newIssueLat}
+                  lng={newIssueLng}
+                  onCoordinatesChange={(latVal, lngVal, wkt) => {
+                    setNewIssueLat(latVal);
+                    setNewIssueLng(lngVal);
+                  }}
+                  showNotification={showNotification}
+                />
               </div>
 
               {/* Description */}

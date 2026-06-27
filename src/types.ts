@@ -4,13 +4,17 @@ export interface CommunityIssue {
   lat: number;
   lng: number;
   severity: number;
-  status: 'BROADCAST' | 'ASSIGNED' | 'RESOLVED';
+  severity_level?: string;
+  status: 'Pending' | 'In Progress' | 'Resolved';
   precedence: number;
   distance: string;
   imageUrl?: string;
+  beforeImageUrl?: string;
   resolvedImageUrl?: string;
   workerNotes?: string;
   aiAdvice?: string;
+  description?: string;
+  resolution_feedback?: string;
 }
 
 export type InfrastructureIssue = CommunityIssue;

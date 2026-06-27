@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Award, ClipboardList, User, Sparkles, Send, ArrowRight, ShieldCheck, Star } from 'lucide-react';
 import { InfrastructureIssue } from '../types';
+import InteractiveMap from './InteractiveMap';
+import OperationalMap from './OperationalMap';
 
 interface CitizenHubProps {
   issues: InfrastructureIssue[];
@@ -16,6 +18,8 @@ interface CitizenHubProps {
   setNewIssueDescription: (val: string) => void;
   uploadedImage: string;
   setUploadedImage: (val: string) => void;
+  uploadedFile: File | null;
+  setUploadedFile: (val: File | null) => void;
   userPoints: number;
   setUserPoints: React.Dispatch<React.SetStateAction<number>>;
   showNotification: (msg: string, type?: string) => void;
@@ -35,6 +39,8 @@ export default function CitizenHub({
   setNewIssueDescription,
   uploadedImage,
   setUploadedImage,
+  uploadedFile,
+  setUploadedFile,
   userPoints,
   setUserPoints,
   showNotification
@@ -50,8 +56,30 @@ export default function CitizenHub({
     setNewIssueLng(lngs[idx]);
   };
 
-  // Filter personal tickets
-  const personalTickets = issues.filter(iss => iss.id.endsWith('-X'));
+  // Filter and sort personal tickets by AI precedence score descending
+  const personalTickets = issues
+    .filter(iss => iss.id.endsWith('-X'))
+    .map(iss => {
+      let status: 'Pending' | 'In Progress' | 'Resolved' = 'Pending';
+      if (iss.status === 'Resolved' || (iss.status as any) === 'RESOLVED') {
+        status = 'Resolved';
+      } else if (iss.status === 'In Progress' || (iss.status as any) === 'ASSIGNED' || (iss.status as any) === 'Requires Review') {
+        status = 'In Progress';
+      }
+
+      let aiScore = (iss.severity * 10) + (iss.precedence * 2.5);
+      if (status === 'Resolved') {
+        aiScore -= 100;
+      } else if (status === 'In Progress') {
+        if (iss.resolution_feedback) {
+          aiScore += 25;
+        } else {
+          aiScore += 10;
+        }
+      }
+      return { ...iss, status, aiScore: Math.round(aiScore) };
+    })
+    .sort((a, b) => b.aiScore - a.aiScore);
 
   const getRank = (pts: number) => {
     if (pts >= 180) return 'Mohalla Mukhiya 👑';
@@ -127,12 +155,14 @@ export default function CitizenHub({
 
                     <div className="text-right">
                       <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
-                        ticket.status === 'RESOLVED' ? 'bg-emerald-500/10 text-emerald-400' :
-                        ticket.status === 'ASSIGNED' ? 'bg-amber-500/10 text-amber-400' : 'bg-rose-500/10 text-rose-400'
+                        ticket.status === 'Resolved' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                        ticket.status === 'In Progress' && ticket.resolution_feedback ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' :
+                        ticket.status === 'In Progress' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
+                        'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                       }`}>
-                        {ticket.status}
+                        {ticket.status === 'In Progress' && ticket.resolution_feedback ? 'Rejected' : ticket.status}
                       </span>
-                      <p className="text-[10px] text-slate-500 mt-1">Precedence: +{ticket.precedence} logs</p>
+                      <p className="text-[10px] text-slate-500 mt-1">Precedence: +{ticket.precedence} logs ({ticket.aiScore} pts)</p>
                     </div>
                   </div>
                 ))}
@@ -166,6 +196,15 @@ export default function CitizenHub({
             </div>
           </div>
 
+          {/* Citizen Grid Operations Map Section */}
+          <div className="md:col-span-3 mt-4">
+            <OperationalMap 
+              issues={issues} 
+              showNotification={showNotification} 
+              title="CITIZEN OPERATIONS REALTIME GRID" 
+            />
+          </div>
+
         </div>
       ) : (
         <div className="max-w-xl mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-6">
@@ -189,6 +228,7 @@ export default function CitizenHub({
                       onChange={(e) => {
                         const file = e.target.files?.[0];
                         if (file) {
+                          setUploadedFile(file);
                           const reader = new FileReader();
                           reader.onloadend = () => {
                             setUploadedImage(reader.result as string);
@@ -218,21 +258,16 @@ export default function CitizenHub({
             </div>
 
             <div>
-              <label className="block text-[11px] font-bold text-slate-400 mb-1">Grid Coordinates</label>
-              <div className="flex gap-2">
-                <input 
-                  type="text" 
-                  value={`${newIssueLat}, ${newIssueLng}`}
-                  readOnly
-                  className="bg-slate-950 border border-slate-850 text-slate-400 text-xs rounded-xl block w-full p-3 font-mono outline-none"
-                />
-                <button 
-                  onClick={handleGPSLocate}
-                  className="bg-slate-800 hover:bg-slate-750 border border-slate-700 text-indigo-400 px-3 py-2 rounded-xl text-[11px] font-bold transition-colors cursor-pointer shrink-0"
-                >
-                  Simulate GPS
-                </button>
-              </div>
+              <label className="block text-[11px] font-bold text-slate-400 mb-2">Issue Location Pin</label>
+              <InteractiveMap 
+                lat={newIssueLat}
+                lng={newIssueLng}
+                onCoordinatesChange={(latVal, lngVal, wkt) => {
+                  setNewIssueLat(latVal);
+                  setNewIssueLng(lngVal);
+                }}
+                showNotification={showNotification}
+              />
             </div>
 
             <div>

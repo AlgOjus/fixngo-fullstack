@@ -18,3 +18,22 @@
 .animate-spin-slow {
   animation: spin-slow 12s linear infinite;
 }
+
+/* Premium dark theme overrides for Leaflet popups */
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: #020617 !important; /* bg-slate-950 */
+  color: #e2e8f0 !important; /* text-slate-200 */
+  border: 1px solid #1e293b !important; /* border-slate-800 */
+  box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.5), 0 8px 10px -6px rgb(0 0 0 / 0.5) !important;
+  border-radius: 1rem !important; /* rounded-2xl */
+}
+.leaflet-popup-content {
+  margin: 0 !important;
+}
+.leaflet-container a.leaflet-popup-close-button {
+  color: #94a3b8 !important; /* text-slate-400 */
+  padding: 8px 8px 0 0 !important;
+}
+.leaflet-container a.leaflet-popup-close-button:hover {
+  color: #f1f5f9 !important; /* text-slate-100 */
+}

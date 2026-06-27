@@ -307,6 +307,61 @@ export default function App() {
     };
   }, []);
 
+  // Fetch real issues from Supabase if configured
+  useEffect(() => {
+    const isSupabaseConfigured = 
+      import.meta.env.VITE_SUPABASE_URL && 
+      import.meta.env.VITE_SUPABASE_URL !== 'https://your-project-id.supabase.co' &&
+      import.meta.env.VITE_SUPABASE_ANON_KEY &&
+      import.meta.env.VITE_SUPABASE_ANON_KEY !== 'your-supabase-anon-key';
+
+    if (!isSupabaseConfigured) return;
+
+    const fetchIssues = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('issues')
+          .select('*');
+
+        if (error) {
+          console.warn("Could not retrieve issues from Supabase table:", error.message);
+          return;
+        }
+
+        if (data && data.length > 0) {
+          const mapped: InfrastructureIssue[] = data.map(item => ({
+            id: item.id || `#${Math.floor(Math.random() * 900) + 100}-X`,
+            category: item.category || 'Pothole',
+            lat: Number(item.lat) || 28.6139,
+            lng: Number(item.lng) || 77.2090,
+            severity: Number(item.severity) || 5,
+            status: item.status || 'Pending',
+            precedence: Number(item.precedence) || 1,
+            distance: item.distance || 'Nearby',
+            imageUrl: item.image_url || item.imageUrl || 'https://images.unsplash.com/photo-1515162305285-0293e4767cc2?auto=format&fit=crop&q=80&w=600',
+            resolvedImageUrl: item.resolved_image_url || item.resolvedImageUrl,
+            workerNotes: item.worker_notes || item.workerNotes,
+            aiAdvice: item.ai_advice || item.aiAdvice || 'Standard civic caution is recommended around the affected block.'
+          }));
+
+          setIssues(prev => {
+            const merged = [...mapped];
+            prev.forEach(localItem => {
+              if (!merged.some(dbItem => dbItem.id === localItem.id)) {
+                merged.push(localItem);
+              }
+            });
+            return merged;
+          });
+        }
+      } catch (err) {
+        console.warn("Error loading issues from database:", err);
+      }
+    };
+
+    fetchIssues();
+  }, []);
+
   // Login simulated status (kept for legacy component prop compatibility, synced automatically)
   const [citizenLoggedIn, setCitizenLoggedIn] = useState(false);
   const [resolverLoggedIn, setResolverLoggedIn] = useState(false);
@@ -327,6 +382,7 @@ export default function App() {
   const [newIssueLng, setNewIssueLng] = useState('77.2090');
   const [newIssueDescription, setNewIssueDescription] = useState('');
   const [uploadedImage, setUploadedImage] = useState<string>('');
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [resolutionImages, setResolutionImages] = useState<Record<string, string>>({});
   const [resolutionNotes, setResolutionNotes] = useState<Record<string, string>>({});
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -366,17 +422,26 @@ export default function App() {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.map(issue => ({
-            ...issue,
-            lat: Number(issue.lat) || 28.6139,
-            lng: Number(issue.lng) || 77.2090,
-            severity: Number(issue.severity) || 5,
-            precedence: Number(issue.precedence) || 1,
-            status: issue.status || 'BROADCAST',
-            category: issue.category || 'Pothole',
-            id: issue.id || `#${Math.floor(Math.random() * 900) + 100}-X`,
-            distance: issue.distance || 'Nearby'
-          }));
+          return parsed.map(issue => {
+            const legacyStatus = issue.status || 'Pending';
+            let status: 'Pending' | 'In Progress' | 'Resolved' = 'Pending';
+            if (legacyStatus === 'Resolved' || legacyStatus === 'RESOLVED') {
+              status = 'Resolved';
+            } else if (legacyStatus === 'In Progress' || legacyStatus === 'ASSIGNED' || legacyStatus === 'Requires Review') {
+              status = 'In Progress';
+            }
+            return {
+              ...issue,
+              lat: Number(issue.lat) || 28.6139,
+              lng: Number(issue.lng) || 77.2090,
+              severity: Number(issue.severity) || 5,
+              precedence: Number(issue.precedence) || 1,
+              status,
+              category: issue.category || 'Pothole',
+              id: issue.id || `#${Math.floor(Math.random() * 900) + 100}-X`,
+              distance: issue.distance || 'Nearby'
+            };
+          });
         }
       } catch (e) {
         console.error("Failed to parse issues from localStorage", e);
@@ -389,7 +454,7 @@ export default function App() {
         lat: 28.6120, 
         lng: 77.2090, 
         severity: 9.8, 
-        status: 'BROADCAST', 
+        status: 'Pending', 
         precedence: 42, 
         distance: '400m',
         imageUrl: 'https://images.unsplash.com/photo-1585338107529-13afc5f02586?auto=format&fit=crop&q=80&w=600',
@@ -401,7 +466,7 @@ export default function App() {
         lat: 28.6150, 
         lng: 77.2110, 
         severity: 7.2, 
-        status: 'ASSIGNED', 
+        status: 'In Progress', 
         precedence: 18, 
         distance: '1.2km',
         imageUrl: 'https://images.unsplash.com/photo-1515162305285-0293e4767cc2?auto=format&fit=crop&q=80&w=600',
@@ -413,7 +478,7 @@ export default function App() {
         lat: 28.6100, 
         lng: 77.2050, 
         severity: 4.5, 
-        status: 'RESOLVED', 
+        status: 'Resolved', 
         precedence: 4, 
         distance: '2.5km',
         imageUrl: 'https://images.unsplash.com/photo-1611284446314-60a58ac0deb9?auto=format&fit=crop&q=80&w=600',
@@ -442,11 +507,31 @@ export default function App() {
 
   // Report Issue submission pipeline integrating Server-Side Gemini AI & Spatial Deduplication Check
   const handleReportIssue = async (isGuest = false) => {
-    const lat = parseFloat(newIssueLat) || 28.6139;
-    const lng = parseFloat(newIssueLng) || 77.2090;
-    const description = newIssueDescription.trim() || `Accumulated issue of type ${newIssueCategory} causing local municipal inconvenience. Please resolve at the earliest.`;
-    
     setIsAnalyzing(true);
+
+    let lat = parseFloat(newIssueLat) || 28.6139;
+    let lng = parseFloat(newIssueLng) || 77.2090;
+
+    // Capture geolocation coordinates using navigator.geolocation.getCurrentPosition
+    if (navigator.geolocation) {
+      try {
+        const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 5000,
+            maximumAge: 0
+          });
+        });
+        lat = position.coords.latitude;
+        lng = position.coords.longitude;
+        setNewIssueLat(lat.toString());
+        setNewIssueLng(lng.toString());
+      } catch (err) {
+        console.warn("Navigator geolocation failed, using default/simulated coordinates:", err);
+      }
+    }
+
+    const description = newIssueDescription.trim() || `Accumulated issue of type ${newIssueCategory} causing local municipal inconvenience. Please resolve at the earliest.`;
     
     // MOCK AI SPATIAL DEDUPLICATION: Check if an issue exists within a tiny radius
     const duplicateIndex = issues.findIndex(issue => 
@@ -462,6 +547,7 @@ export default function App() {
       setIsAnalyzing(false);
       setNewIssueDescription('');
       setUploadedImage('');
+      setUploadedFile(null);
       handleTabChange('landing');
       return;
     }
@@ -502,6 +588,45 @@ export default function App() {
       }
     }
 
+    let beforeImageUrl = '';
+
+    const isSupabaseConfigured = 
+      import.meta.env.VITE_SUPABASE_URL && 
+      import.meta.env.VITE_SUPABASE_URL !== 'https://your-project-id.supabase.co' &&
+      import.meta.env.VITE_SUPABASE_ANON_KEY &&
+      import.meta.env.VITE_SUPABASE_ANON_KEY !== 'your-supabase-anon-key';
+
+    if (isSupabaseConfigured && uploadedFile) {
+      try {
+        const fileExt = uploadedFile.name.split('.').pop() || 'jpg';
+        const fileName = `${Date.now()}-${Math.floor(Math.random() * 100000)}.${fileExt}`;
+        
+        // 1. Upload the selected file to the 'pothole-images' bucket
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('pothole-images')
+          .upload(fileName, uploadedFile, {
+            cacheControl: '3600',
+            upsert: false
+          });
+
+        if (uploadError) {
+          console.error("Storage upload error:", uploadError.message);
+        } else if (uploadData) {
+          // 2. Take the path of the uploaded file and call .getPublicUrl(...)
+          const { data: urlData } = supabase.storage
+            .from('pothole-images')
+            .getPublicUrl(uploadData.path);
+          
+          if (urlData && urlData.publicUrl) {
+            beforeImageUrl = urlData.publicUrl;
+            finalImg = urlData.publicUrl;
+          }
+        }
+      } catch (err) {
+        console.error("Exception during storage upload:", err);
+      }
+    }
+
     // Create new ticket
     const newIssue: InfrastructureIssue = {
       id: `#${Math.floor(Math.random() * 900) + 100}-${isGuest ? 'G' : 'X'}`,
@@ -509,12 +634,44 @@ export default function App() {
       lat: lat,
       lng: lng,
       severity: parseFloat(parsedSeverity.toFixed(1)),
-      status: 'BROADCAST',
+      status: 'Pending',
       precedence: 1,
       distance: 'Nearby',
       imageUrl: finalImg,
+      beforeImageUrl: beforeImageUrl || finalImg,
       aiAdvice: advice
     };
+
+    if (isSupabaseConfigured) {
+      try {
+        // 3. Finally, insert the new row into the 'issues' table, with before_image_url and Pending status
+        const { error: dbError } = await supabase
+          .from('issues')
+          .insert({
+            id: newIssue.id,
+            category: newIssue.category,
+            lat: newIssue.lat,
+            lng: newIssue.lng,
+            location: `SRID=4326;POINT(${lng} ${lat})`,
+            severity: newIssue.severity,
+            status: 'Pending', // matches database issue_status_enum
+            precedence: newIssue.precedence,
+            distance: newIssue.distance,
+            image_url: newIssue.imageUrl,
+            before_image_url: beforeImageUrl || finalImg,
+            ai_advice: newIssue.aiAdvice,
+            created_at: new Date().toISOString()
+          });
+
+        if (dbError) {
+          console.warn("Client-side direct issue sync notice:", dbError.message);
+        } else {
+          console.log("Issue successfully saved to Supabase issues table!");
+        }
+      } catch (dbErr: any) {
+        console.warn("Error running direct client-side issue sync:", dbErr);
+      }
+    }
 
     setIssues([newIssue, ...issues]);
     showNotification(`New infrastructure dispatch initiated. Severity: ${newIssue.severity}/10.`);
@@ -523,6 +680,7 @@ export default function App() {
     setIsAnalyzing(false);
     setNewIssueDescription('');
     setUploadedImage('');
+    setUploadedFile(null);
 
     if (!isGuest) {
       setUserPoints(prev => prev + 10);
@@ -534,23 +692,48 @@ export default function App() {
 
   const handleAcceptTask = (id: string) => {
     setIssues(issues.map(issue => 
-      issue.id === id ? { ...issue, status: 'ASSIGNED' } : issue
+      issue.id === id ? { ...issue, status: 'In Progress' } : issue
     ));
-    showNotification(`Active Task ${id} Accepted. Status updated to ASSIGNED.`);
+    showNotification(`Active Task ${id} Accepted. Status updated to In Progress.`);
   };
 
   const handleVerifyFix = (id: string) => {
     const notes = resolutionNotes[id] || 'Verified structural cold-mix patching completed. Disinfected block.';
     const img = resolutionImages[id] || 'https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&q=80&w=600';
 
-    setIssues(issues.map(issue => 
-      issue.id === id ? { 
-        ...issue, 
-        status: 'RESOLVED',
-        resolvedImageUrl: img,
-        workerNotes: notes
-      } : issue
-    ));
+    // Simulate Gemini QA inspection logic
+    const lowerNotes = notes.toLowerCase();
+    const isRejected = lowerNotes.includes('fail') || 
+                       lowerNotes.includes('incomplete') || 
+                       lowerNotes.includes('bad') || 
+                       lowerNotes.includes('temporary') || 
+                       lowerNotes.includes('partially');
+
+    if (isRejected) {
+      setIssues(issues.map(issue => 
+        issue.id === id ? { 
+          ...issue, 
+          status: 'In Progress',
+          resolvedImageUrl: img,
+          workerNotes: notes,
+          resolution_feedback: "AI QA Inspector: The submitted repair image show incomplete filling of cracks and residual debris on site. The site has not been fully cleared of hazards."
+        } : issue
+      ));
+      showNotification(`AI Verification Rejected: Issue remains In Progress with review notes.`, 'warning');
+    } else {
+      setIssues(issues.map(issue => 
+        issue.id === id ? { 
+          ...issue, 
+          status: 'Resolved',
+          resolvedImageUrl: img,
+          workerNotes: notes,
+          resolution_feedback: undefined
+        } : issue
+      ));
+      // Reward validation bonus to reporter points
+      setUserPoints(prev => prev + 10);
+      showNotification(`AI Verification Complete. Task ${id} marked as Resolved.`);
+    }
     
     // Clear temp storage
     setResolutionNotes(prev => {
@@ -563,11 +746,6 @@ export default function App() {
       delete c[id];
       return c;
     });
-
-    // Reward validation bonus to reporter points
-    setUserPoints(prev => prev + 10);
-
-    showNotification(`AI Verification Complete. Task ${id} marked as RESOLVED.`);
   };
 
   return (
@@ -722,9 +900,12 @@ export default function App() {
             setNewIssueDescription={setNewIssueDescription}
             uploadedImage={uploadedImage}
             setUploadedImage={setUploadedImage}
+            uploadedFile={uploadedFile}
+            setUploadedFile={setUploadedFile}
             handleTabChange={handleTabChange}
             citizenLoggedIn={citizenLoggedIn}
             resolverLoggedIn={resolverLoggedIn}
+            showNotification={showNotification}
           />
         )}
 
@@ -755,6 +936,8 @@ export default function App() {
                setNewIssueDescription={setNewIssueDescription}
                uploadedImage={uploadedImage}
                setUploadedImage={setUploadedImage}
+               uploadedFile={uploadedFile}
+               setUploadedFile={setUploadedFile}
                userPoints={userPoints}
                setUserPoints={setUserPoints}
                showNotification={showNotification}
