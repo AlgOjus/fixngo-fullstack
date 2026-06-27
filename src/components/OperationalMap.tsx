@@ -124,7 +124,7 @@ export default function OperationalMap({
     setMapZoom(16);
     setSelectedIssueId(issue.id);
     if (showNotification) {
-      showNotification(`Centering on ${issue.category} (#${issue.id.slice(0, 5)})`, 'success');
+      showNotification(`Centering on ${issue.category} (${issue.id.startsWith('#') ? issue.id : '#' + issue.id.slice(0, 8)})`, 'success');
     }
   };
 

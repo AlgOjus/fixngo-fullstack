@@ -68,7 +68,7 @@ export default function ResolverDashboard({ onIssueDispatched }: ResolverDashboa
 
       if (data) {
         const mapped: InfrastructureIssue[] = data.map(item => ({
-          id: item.id || `#${Math.floor(Math.random() * 900) + 100}-X`,
+          id: item.id || (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : 'raw-' + Math.random().toString(36).substring(2, 15)),
           category: item.category || 'Road Damage',
           lat: Number(item.lat) || 28.6139,
           lng: Number(item.lng) || 77.2090,

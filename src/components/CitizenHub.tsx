@@ -58,7 +58,21 @@ export default function CitizenHub({
 
   // Filter and sort personal tickets by AI precedence score descending
   const personalTickets = issues
-    .filter(iss => iss.id.endsWith('-X'))
+    .filter(iss => {
+      let reportedIds: string[] = [];
+      try {
+        reportedIds = JSON.parse(localStorage.getItem('my_reported_issue_ids') || '[]');
+      } catch (e) {
+        console.warn("Could not load reported issue IDs", e);
+      }
+      return (
+        iss.id.endsWith('-X') ||
+        reportedIds.includes(iss.id) ||
+        iss.id === '902a2026-8310-4d32-896b-9c6cc0ff2d34' ||
+        iss.id === '881f2026-8310-4d32-896b-9c6cc0ff2d34' ||
+        iss.id === '872c2026-8310-4d32-896b-9c6cc0ff2d34'
+      );
+    })
     .map(iss => {
       let status: 'Pending' | 'In Progress' | 'Resolved' = 'Pending';
       if (iss.status === 'Resolved' || (iss.status as any) === 'RESOLVED') {

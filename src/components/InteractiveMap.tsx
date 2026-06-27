@@ -24,6 +24,7 @@ interface InteractiveMapProps {
   lng: string;
   onCoordinatesChange: (lat: string, lng: string, wkt: string) => void;
   showNotification?: (msg: string, type?: string) => void;
+  showWKT?: boolean;
 }
 
 // Inner helper component to manage map viewing center dynamically
@@ -53,7 +54,8 @@ export default function InteractiveMap({
   lat,
   lng,
   onCoordinatesChange,
-  showNotification
+  showNotification,
+  showWKT = false
 }: InteractiveMapProps) {
   const [currentCenter, setCurrentCenter] = useState<[number, number]>([28.6139, 77.2090]); // Default to New Delhi
   const [markerPos, setMarkerPos] = useState<[number, number] | null>(null);
@@ -235,12 +237,14 @@ export default function InteractiveMap({
               <p className="text-xs text-white font-mono font-medium mt-0.5">{markerPos[1].toFixed(6)}</p>
             </div>
           </div>
-          <div className="pt-2">
-            <p className="text-[9px] text-slate-500 uppercase font-bold font-mono mb-1">Generated WKT String</p>
-            <div className="bg-slate-900 border border-slate-850 p-2 rounded-lg font-mono text-[10px] text-indigo-400 select-all break-all leading-normal">
-              {wktString}
+          {showWKT && (
+            <div className="pt-2">
+              <p className="text-[9px] text-slate-500 uppercase font-bold font-mono mb-1">Generated WKT String</p>
+              <div className="bg-slate-900 border border-slate-850 p-2 rounded-lg font-mono text-[10px] text-indigo-400 select-all break-all leading-normal">
+                {wktString}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

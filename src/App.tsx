@@ -71,6 +71,22 @@ function AccessDeniedOverlay({ requiredRole, onRedirectToLogin }: { requiredRole
   );
 }
 
+// Helper RFC4122 compliant UUID v4 generator
+const generateUUID = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    try {
+      return crypto.randomUUID();
+    } catch (e) {
+      console.warn("crypto.randomUUID failed, falling back:", e);
+    }
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
+
 export default function App() {
   // Client-side router synchronized with the browser address bar
   const getInitialTab = () => {
@@ -329,20 +345,39 @@ export default function App() {
         }
 
         if (data && data.length > 0) {
-          const mapped: InfrastructureIssue[] = data.map(item => ({
-            id: item.id || `#${Math.floor(Math.random() * 900) + 100}-X`,
-            category: item.category || 'Pothole',
-            lat: Number(item.lat) || 28.6139,
-            lng: Number(item.lng) || 77.2090,
-            severity: Number(item.severity) || 5,
-            status: item.status || 'Pending',
-            precedence: Number(item.precedence) || 1,
-            distance: item.distance || 'Nearby',
-            imageUrl: item.image_url || item.imageUrl || 'https://images.unsplash.com/photo-1515162305285-0293e4767cc2?auto=format&fit=crop&q=80&w=600',
-            resolvedImageUrl: item.resolved_image_url || item.resolvedImageUrl,
-            workerNotes: item.worker_notes || item.workerNotes,
-            aiAdvice: item.ai_advice || item.aiAdvice || 'Standard civic caution is recommended around the affected block.'
-          }));
+          const mapped: InfrastructureIssue[] = data.map(item => {
+            // Clean up legacy ID format if present
+            let cleanId = item.id;
+            if (cleanId && (cleanId.startsWith('#') || cleanId.includes('-X') || cleanId.includes('-G'))) {
+              if (cleanId === '#902-A' || cleanId === '902a2026-8310-4d32-896b-9c6cc0ff2d34-X') {
+                cleanId = '902a2026-8310-4d32-896b-9c6cc0ff2d34';
+              } else if (cleanId === '#881-F' || cleanId === '881f2026-8310-4d32-896b-9c6cc0ff2d34-X') {
+                cleanId = '881f2026-8310-4d32-896b-9c6cc0ff2d34';
+              } else if (cleanId === '#872-C' || cleanId === '872c2026-8310-4d32-896b-9c6cc0ff2d34-X') {
+                cleanId = '872c2026-8310-4d32-896b-9c6cc0ff2d34';
+              } else {
+                cleanId = cleanId.replace(/^[#]/, '').replace(/-[XG]$/, '');
+                if (cleanId.length < 10) {
+                  cleanId = generateUUID();
+                }
+              }
+            }
+
+            return {
+              id: cleanId || generateUUID(),
+              category: item.category || 'Pothole',
+              lat: Number(item.lat) || 28.6139,
+              lng: Number(item.lng) || 77.2090,
+              severity: Number(item.severity) || 5,
+              status: item.status || 'Pending',
+              precedence: Number(item.precedence) || 1,
+              distance: item.distance || 'Nearby',
+              imageUrl: item.image_url || item.imageUrl || 'https://images.unsplash.com/photo-1515162305285-0293e4767cc2?auto=format&fit=crop&q=80&w=600',
+              resolvedImageUrl: item.resolved_image_url || item.resolvedImageUrl,
+              workerNotes: item.worker_notes || item.workerNotes,
+              aiAdvice: item.ai_advice || item.aiAdvice || 'Standard civic caution is recommended around the affected block.'
+            };
+          });
 
           setIssues(prev => {
             const merged = [...mapped];
@@ -430,15 +465,31 @@ export default function App() {
             } else if (legacyStatus === 'In Progress' || legacyStatus === 'ASSIGNED' || legacyStatus === 'Requires Review') {
               status = 'In Progress';
             }
+
+            // Migrating old/legacy short or suffixed IDs to clean UUIDs
+            let cleanId = issue.id;
+            if (issue.id === '#902-A' || issue.id === '902a2026-8310-4d32-896b-9c6cc0ff2d34-X') {
+              cleanId = '902a2026-8310-4d32-896b-9c6cc0ff2d34';
+            } else if (issue.id === '#881-F' || issue.id === '881f2026-8310-4d32-896b-9c6cc0ff2d34-X') {
+              cleanId = '881f2026-8310-4d32-896b-9c6cc0ff2d34';
+            } else if (issue.id === '#872-C' || issue.id === '872c2026-8310-4d32-896b-9c6cc0ff2d34-X') {
+              cleanId = '872c2026-8310-4d32-896b-9c6cc0ff2d34';
+            } else if (issue.id && (issue.id.startsWith('#') || issue.id.includes('-X') || issue.id.includes('-G'))) {
+              cleanId = issue.id.replace(/^[#]/, '').replace(/-[XG]$/, '');
+              if (cleanId.length < 10) {
+                cleanId = generateUUID();
+              }
+            }
+
             return {
               ...issue,
+              id: cleanId || generateUUID(),
               lat: Number(issue.lat) || 28.6139,
               lng: Number(issue.lng) || 77.2090,
               severity: Number(issue.severity) || 5,
               precedence: Number(issue.precedence) || 1,
               status,
               category: issue.category || 'Pothole',
-              id: issue.id || `#${Math.floor(Math.random() * 900) + 100}-X`,
               distance: issue.distance || 'Nearby'
             };
           });
@@ -449,7 +500,7 @@ export default function App() {
     }
     return [
       { 
-        id: '#902-A', 
+        id: '902a2026-8310-4d32-896b-9c6cc0ff2d34', 
         category: 'Water Leakage', 
         lat: 28.6120, 
         lng: 77.2090, 
@@ -461,7 +512,7 @@ export default function App() {
         aiAdvice: 'Clean water pipeline rupture. High flooding risk. Pedestrians should avoid path near central sector.'
       },
       { 
-        id: '#881-F', 
+        id: '881f2026-8310-4d32-896b-9c6cc0ff2d34', 
         category: 'Pothole', 
         lat: 28.6150, 
         lng: 77.2110, 
@@ -473,7 +524,7 @@ export default function App() {
         aiAdvice: 'Deep road crater. Heavy risk of structural vehicle damage. Limit speed under 10km/h.'
       },
       { 
-        id: '#872-C', 
+        id: '872c2026-8310-4d32-896b-9c6cc0ff2d34', 
         category: 'Waste Overflow', 
         lat: 28.6100, 
         lng: 77.2050, 
@@ -601,20 +652,56 @@ export default function App() {
         const fileExt = uploadedFile.name.split('.').pop() || 'jpg';
         const fileName = `${Date.now()}-${Math.floor(Math.random() * 100000)}.${fileExt}`;
         
-        // 1. Upload the selected file to the 'pothole-images' bucket
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('pothole-images')
+        // 1. Sequentially try uploading to 'issue-images', 'pothole-images', and 'issues'
+        let uploadData = null;
+        let uploadError = null;
+        let chosenBucket = 'issue-images';
+
+        const { data: upData1, error: err1 } = await supabase.storage
+          .from('issue-images')
           .upload(fileName, uploadedFile, {
             cacheControl: '3600',
             upsert: false
           });
 
-        if (uploadError) {
-          console.error("Storage upload error:", uploadError.message);
-        } else if (uploadData) {
+        if (upData1) {
+          uploadData = upData1;
+          chosenBucket = 'issue-images';
+        } else {
+          console.warn("Storage upload to 'issue-images' failed, trying 'pothole-images'...", err1?.message);
+          const { data: upData2, error: err2 } = await supabase.storage
+            .from('pothole-images')
+            .upload(fileName, uploadedFile, {
+              cacheControl: '3600',
+              upsert: false
+            });
+
+          if (upData2) {
+            uploadData = upData2;
+            chosenBucket = 'pothole-images';
+          } else {
+            console.warn("Storage upload to 'pothole-images' failed, trying 'issues'...", err2?.message);
+            const { data: upData3, error: err3 } = await supabase.storage
+              .from('issues')
+              .upload(fileName, uploadedFile, {
+                cacheControl: '3600',
+                upsert: false
+              });
+
+            if (upData3) {
+              uploadData = upData3;
+              chosenBucket = 'issues';
+            } else {
+              uploadError = err3 || err2 || err1;
+              console.error("All Supabase bucket uploads failed. Error:", uploadError?.message);
+            }
+          }
+        }
+
+        if (uploadData) {
           // 2. Take the path of the uploaded file and call .getPublicUrl(...)
           const { data: urlData } = supabase.storage
-            .from('pothole-images')
+            .from(chosenBucket)
             .getPublicUrl(uploadData.path);
           
           if (urlData && urlData.publicUrl) {
@@ -627,9 +714,19 @@ export default function App() {
       }
     }
 
+    const newId = generateUUID();
+    // Register ID as personal in local registry
+    try {
+      const currentReported = JSON.parse(localStorage.getItem('my_reported_issue_ids') || '[]');
+      currentReported.push(newId);
+      localStorage.setItem('my_reported_issue_ids', JSON.stringify(currentReported));
+    } catch (e) {
+      console.warn("Could not save new ID to reported list:", e);
+    }
+
     // Create new ticket
     const newIssue: InfrastructureIssue = {
-      id: `#${Math.floor(Math.random() * 900) + 100}-${isGuest ? 'G' : 'X'}`,
+      id: newId,
       category: newIssueCategory,
       lat: lat,
       lng: lng,
@@ -976,6 +1073,8 @@ export default function App() {
                setIssues={setIssues}
                showNotification={showNotification}
                bypassAuth={true}
+               mockUserDatabase={mockUserDatabase}
+               currentUser={currentUser}
              />
            ) : (
              <AccessDeniedOverlay 

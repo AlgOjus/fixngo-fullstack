@@ -1,15 +1,24 @@
 import React, { useState } from 'react';
-import { ShieldAlert, Terminal, Eye, EyeOff, AlertTriangle, Database, Trash2, CheckCircle } from 'lucide-react';
-import { InfrastructureIssue } from '../types';
+import { ShieldAlert, Terminal, Eye, EyeOff, AlertTriangle, Database, Trash2, CheckCircle, Users } from 'lucide-react';
+import { InfrastructureIssue, UserAccount } from '../types';
 
 interface AdminConsoleProps {
   issues: InfrastructureIssue[];
   setIssues: React.Dispatch<React.SetStateAction<InfrastructureIssue[]>>;
   showNotification: (msg: string, type?: string) => void;
   bypassAuth?: boolean;
+  mockUserDatabase?: UserAccount[];
+  currentUser?: UserAccount | null;
 }
 
-export default function AdminConsole({ issues, setIssues, showNotification, bypassAuth = false }: AdminConsoleProps) {
+export default function AdminConsole({ 
+  issues, 
+  setIssues, 
+  showNotification, 
+  bypassAuth = false,
+  mockUserDatabase = [],
+  currentUser = null
+}: AdminConsoleProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -200,7 +209,12 @@ export default function AdminConsole({ issues, setIssues, showNotification, bypa
               <tbody className="divide-y divide-slate-800/40 text-slate-300">
                 {sortedIssues.map(issue => (
                   <tr key={issue.id} className="hover:bg-slate-800/20">
-                    <td className="py-3 font-mono text-slate-400">{issue.id}</td>
+                    <td className="py-3 font-mono text-slate-400">
+                      <div className="font-bold text-slate-200">{issue.id}</div>
+                      <div className="text-[10px] text-indigo-400 font-mono mt-0.5 select-all" title="PostGIS WKT String">
+                        SRID=4326;POINT({Number(issue.lng || 77.2090).toFixed(6)} {Number(issue.lat || 28.6139).toFixed(6)})
+                      </div>
+                    </td>
                     <td className="py-3 font-bold">{issue.category}</td>
                     <td className="py-3">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -261,6 +275,76 @@ export default function AdminConsole({ issues, setIssues, showNotification, bypa
             <div>[09:55:18] MON: Core microservices report 100% throughput</div>
             <div>[09:56:44] DB: Safe synced cached state to cloud local backup</div>
           </div>
+        </div>
+      </div>
+
+      {/* Registered & Active User Session Directory */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+        <h3 className="text-sm font-bold text-white flex items-center gap-2">
+          <Users className="w-4 h-4 text-orange-500" />
+          <span>Registered Accounts & Session Directory</span>
+        </h3>
+        
+        <div className="overflow-x-auto text-xs">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="text-slate-500 border-b border-slate-800 pb-2">
+                <th className="pb-2">User ID</th>
+                <th className="pb-2">Full Name</th>
+                <th className="pb-2">Email Address</th>
+                <th className="pb-2">Role</th>
+                <th className="pb-2">Session Status</th>
+                <th className="pb-2 text-right">Created Date</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/40 text-slate-300">
+              {mockUserDatabase.map(user => {
+                const isUserActive = currentUser?.id === user.id;
+                return (
+                  <tr key={user.id} className="hover:bg-slate-800/20">
+                    <td className="py-3 font-mono text-slate-400 text-[10px]">{user.id}</td>
+                    <td className="py-3 font-bold text-white">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-[9px] border shrink-0 ${
+                          user.role === 'citizen' ? 'bg-indigo-500/10 border-indigo-500/25 text-indigo-400' :
+                          user.role === 'resolver' ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400' :
+                          'bg-rose-500/10 border-rose-500/25 text-rose-400'
+                        }`}>
+                          {user.fullName ? user.fullName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'US'}
+                        </div>
+                        <span>{user.fullName}</span>
+                      </div>
+                    </td>
+                    <td className="py-3 font-mono text-[11px]">{user.email}</td>
+                    <td className="py-3">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                        user.role === 'admin' ? 'bg-rose-500/15 text-rose-400 border border-rose-500/20' :
+                        user.role === 'resolver' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' :
+                        'bg-indigo-500/15 text-indigo-400 border border-indigo-500/20'
+                      }`}>
+                        {user.role}
+                      </span>
+                    </td>
+                    <td className="py-3">
+                      {isUserActive ? (
+                        <span className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded text-[10px] font-bold">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                          Logged In
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 bg-slate-950 text-slate-500 border border-slate-850/60 px-2 py-0.5 rounded text-[10px] font-semibold">
+                          Registered
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 text-slate-400 font-mono text-right">
+                      {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
 
