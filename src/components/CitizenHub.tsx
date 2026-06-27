@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Award, ClipboardList, User, Sparkles, Send, ArrowRight, ShieldCheck, Star } from 'lucide-react';
 import { InfrastructureIssue } from '../types';
-import InteractiveMap from './InteractiveMap';
+import LocationInputResilient from './LocationInputResilient';
 import OperationalMap from './OperationalMap';
+import MediaCapture from './MediaCapture';
 
 interface CitizenHubProps {
   issues: InfrastructureIssue[];
@@ -16,6 +17,8 @@ interface CitizenHubProps {
   setNewIssueLng: (val: string) => void;
   newIssueDescription: string;
   setNewIssueDescription: (val: string) => void;
+  customCategoryNote: string;
+  setCustomCategoryNote: (val: string) => void;
   uploadedImage: string;
   setUploadedImage: (val: string) => void;
   uploadedFile: File | null;
@@ -37,6 +40,8 @@ export default function CitizenHub({
   setNewIssueLng,
   newIssueDescription,
   setNewIssueDescription,
+  customCategoryNote,
+  setCustomCategoryNote,
   uploadedImage,
   setUploadedImage,
   uploadedFile,
@@ -230,31 +235,16 @@ export default function CitizenHub({
           <div className="space-y-4">
             <div>
               <label className="block text-[11px] font-bold text-slate-400 mb-1.5">Attach Photo Evidence</label>
-              <div className="border border-dashed border-slate-800 rounded-xl h-28 flex flex-col items-center justify-center cursor-pointer bg-slate-950 hover:border-slate-700 transition-colors relative overflow-hidden">
-                {uploadedImage ? (
-                  <img src={uploadedImage} alt="Defect Visual" className="w-full h-full object-cover" />
-                ) : (
-                  <div className="text-center p-3">
-                    <span className="text-[10px] text-slate-500 block">Click to simulate photo upload</span>
-                    <input 
-                      type="file" 
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          setUploadedFile(file);
-                          const reader = new FileReader();
-                          reader.onloadend = () => {
-                            setUploadedImage(reader.result as string);
-                          };
-                          reader.readAsDataURL(file);
-                        }
-                      }}
-                      className="text-[10px] text-slate-500 block mt-1 mx-auto max-w-[180px]"
-                    />
-                  </div>
-                )}
-              </div>
+              <MediaCapture
+                uploadedImage={uploadedImage}
+                setUploadedImage={setUploadedImage}
+                setUploadedFile={setUploadedFile}
+                onLocationExtracted={(lat, lng) => {
+                  setNewIssueLat(lat);
+                  setNewIssueLng(lng);
+                }}
+                showNotification={showNotification}
+              />
             </div>
 
             <div>
@@ -268,15 +258,30 @@ export default function CitizenHub({
                 <option value="Water Leakage">💧 Water Leakage & Waste</option>
                 <option value="Waste Overflow">🗑️ Waste Overflow & Dirt</option>
                 <option value="Dead Streetlight">💡 Dead Streetlight</option>
+                <option value="Other">❓ Other (Specify Below)</option>
               </select>
+
+              {newIssueCategory === 'Other' && (
+                <div className="mt-2.5 animate-fade-in">
+                  <label className="block text-[11px] font-bold text-slate-400 mb-1">Specify Custom Category Note</label>
+                  <input 
+                    type="text"
+                    value={customCategoryNote}
+                    onChange={(e) => setCustomCategoryNote(e.target.value)}
+                    placeholder="e.g. Broken park bench, low-hanging electric wire..."
+                    className="w-full bg-slate-950 border border-slate-850 text-slate-300 text-xs rounded-xl p-3 outline-none focus:border-indigo-500 transition-colors"
+                    id="custom-category-note-input-citizen"
+                  />
+                </div>
+              )}
             </div>
 
             <div>
-              <label className="block text-[11px] font-bold text-slate-400 mb-2">Issue Location Pin</label>
-              <InteractiveMap 
+              <label className="block text-[11px] font-bold text-slate-400 mb-2">Issue Location Pin & Resilient Capture</label>
+              <LocationInputResilient 
                 lat={newIssueLat}
                 lng={newIssueLng}
-                onCoordinatesChange={(latVal, lngVal, wkt) => {
+                onCoordinatesChange={(latVal, lngVal) => {
                   setNewIssueLat(latVal);
                   setNewIssueLng(lngVal);
                 }}

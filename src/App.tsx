@@ -416,6 +416,7 @@ export default function App() {
   const [newIssueLat, setNewIssueLat] = useState('28.6139');
   const [newIssueLng, setNewIssueLng] = useState('77.2090');
   const [newIssueDescription, setNewIssueDescription] = useState('');
+  const [customCategoryNote, setCustomCategoryNote] = useState('');
   const [uploadedImage, setUploadedImage] = useState<string>('');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [resolutionImages, setResolutionImages] = useState<Record<string, string>>({});
@@ -560,11 +561,12 @@ export default function App() {
   const handleReportIssue = async (isGuest = false) => {
     setIsAnalyzing(true);
 
-    let lat = parseFloat(newIssueLat) || 28.6139;
-    let lng = parseFloat(newIssueLng) || 77.2090;
+    let lat = parseFloat(newIssueLat);
+    let lng = parseFloat(newIssueLng);
+    const isDefaultCoords = (isNaN(lat) || isNaN(lng) || (lat === 28.6139 && lng === 77.2090));
 
-    // Capture geolocation coordinates using navigator.geolocation.getCurrentPosition
-    if (navigator.geolocation) {
+    // Only capture geolocation via navigator if coordinates are default and we need a fallback
+    if (isDefaultCoords && navigator.geolocation) {
       try {
         const position = await new Promise<GeolocationPosition>((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(resolve, reject, {
@@ -581,6 +583,9 @@ export default function App() {
         console.warn("Navigator geolocation failed, using default/simulated coordinates:", err);
       }
     }
+
+    if (isNaN(lat)) lat = 28.6139;
+    if (isNaN(lng)) lng = 77.2090;
 
     const description = newIssueDescription.trim() || `Accumulated issue of type ${newIssueCategory} causing local municipal inconvenience. Please resolve at the earliest.`;
     
@@ -757,7 +762,8 @@ export default function App() {
             image_url: newIssue.imageUrl,
             before_image_url: beforeImageUrl || finalImg,
             ai_advice: newIssue.aiAdvice,
-            created_at: new Date().toISOString()
+            created_at: new Date().toISOString(),
+            custom_category_note: newIssueCategory === 'Other' ? customCategoryNote : null
           });
 
         if (dbError) {
@@ -776,6 +782,7 @@ export default function App() {
     // Reset Form
     setIsAnalyzing(false);
     setNewIssueDescription('');
+    setCustomCategoryNote('');
     setUploadedImage('');
     setUploadedFile(null);
 
@@ -995,6 +1002,8 @@ export default function App() {
             setNewIssueLng={setNewIssueLng}
             newIssueDescription={newIssueDescription}
             setNewIssueDescription={setNewIssueDescription}
+            customCategoryNote={customCategoryNote}
+            setCustomCategoryNote={setCustomCategoryNote}
             uploadedImage={uploadedImage}
             setUploadedImage={setUploadedImage}
             uploadedFile={uploadedFile}
@@ -1031,6 +1040,8 @@ export default function App() {
                setNewIssueLng={setNewIssueLng}
                newIssueDescription={newIssueDescription}
                setNewIssueDescription={setNewIssueDescription}
+               customCategoryNote={customCategoryNote}
+               setCustomCategoryNote={setCustomCategoryNote}
                uploadedImage={uploadedImage}
                setUploadedImage={setUploadedImage}
                uploadedFile={uploadedFile}

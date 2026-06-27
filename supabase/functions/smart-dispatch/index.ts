@@ -41,7 +41,7 @@ serve(async (req) => {
       });
     }
 
-    const { id, description, before_image_url } = record;
+    const { id, description, before_image_url, category, custom_category_note } = record;
     if (!id) {
       return new Response(JSON.stringify({ error: "Missing row identifier 'id' in record." }), {
         status: 400,
@@ -60,54 +60,213 @@ serve(async (req) => {
       },
     });
 
-    console.log(`Processing Ticket ID: ${id}. Preparing Gemini Smart Dispatch analysis...`);
+    console.log(`Processing Ticket ID: ${id}. Initializing Intelligent De-duplication pipeline...`);
 
-    // 4. Construct Content Parts for Gemini
-    const contents: any[] = [];
-    
-    // Add text prompt specifying analysis constraints
-    const textPrompt = `
-You are a senior civic infrastructure dispatcher. Analyze the following reported issue description and image (if provided) to classify and assess severity.
+    // --- SPATIAL PROXIMITY CHECK ---
+    let nearbyIssues: any[] = [];
+    try {
+      console.log(`Performing Spatial Proximity Check for coordinates: ${record.lat}, ${record.lng}`);
+      // Attempt PostGIS ST_DWithin query via RPC
+      const { data, error } = await supabase.rpc("check_spatial_proximity", {
+        new_lat: parseFloat(record.lat),
+        new_lng: parseFloat(record.lng),
+        radius_meters: 20
+      });
 
-Issue Description: "${description || "No description provided."}"
+      if (!error && data) {
+        nearbyIssues = data.filter((item: any) => item.id !== id && (item.status === "Pending" || item.status === "In Progress"));
+        console.log(`RPC Spatial Check completed. Found ${nearbyIssues.length} active nearby issue(s).`);
+      } else {
+        console.warn("RPC check_spatial_proximity unavailable or errored. Using client-side Haversine fallback:", error?.message);
+        
+        // Fetch existing Pending or In Progress issues
+        const { data: activeIssues, error: fetchError } = await supabase
+          .from("issues")
+          .select("*")
+          .in("status", ["Pending", "In Progress"])
+          .neq("id", id);
 
-You must respond with a JSON object containing EXACTLY these two fields:
-1. "severity": String must be one of: "High", "Medium", "Low".
-2. "category": String must be one of: "Road Damage", "Water Logging", "Other".
+        if (!fetchError && activeIssues) {
+          const getDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+            const R = 6371e3; // Earth radius in meters
+            const phi1 = lat1 * Math.PI / 180;
+            const phi2 = lat2 * Math.PI / 180;
+            const deltaPhi = (lat2 - lat1) * Math.PI / 180;
+            const deltaLambda = (lon2 - lon1) * Math.PI / 180;
 
-Provide a precise, objective evaluation.
-`;
-    contents.push({ text: textPrompt });
+            const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+                      Math.cos(phi1) * Math.cos(phi2) *
+                      Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-    // Download and append before_image_url if present
-    if (before_image_url && before_image_url.startsWith("http")) {
-      try {
-        console.log(`Fetching issue evidence image: ${before_image_url}`);
-        const imageRes = await fetch(before_image_url);
-        if (imageRes.ok) {
-          const contentType = imageRes.headers.get("content-type") || "image/jpeg";
-          const arrayBuffer = await imageRes.arrayBuffer();
-          const base64Data = Buffer.from(arrayBuffer).toString("base64");
-          
-          contents.push({
-            inlineData: {
-              mimeType: contentType,
-              data: base64Data,
-            },
+            return R * c; // in meters
+          };
+
+          nearbyIssues = activeIssues.filter((issue: any) => {
+            const issueLat = Number(issue.lat);
+            const issueLng = Number(issue.lng);
+            if (isNaN(issueLat) || isNaN(issueLng)) return false;
+            const dist = getDistanceMeters(parseFloat(record.lat), parseFloat(record.lng), issueLat, issueLng);
+            return dist <= 20; // 20-meter threshold
           });
-          console.log("Evidence image successfully appended to multimodal contents.");
+          console.log(`Haversine Proximity Check returned ${nearbyIssues.length} active nearby issue(s) within 20m.`);
         } else {
-          console.warn(`Failed to fetch image from URL: ${before_image_url}. Status: ${imageRes.status}. Continuing with text-only analysis.`);
+          console.error("Proximity Check fallback fetch failed:", fetchError?.message);
         }
-      } catch (imageErr) {
-        console.warn("Could not retrieve or process image, falling back to text-only analysis:", imageErr);
+      }
+    } catch (proximityErr) {
+      console.error("Proximity Check encountered exception:", proximityErr);
+    }
+
+    // --- SEMANTIC SIMILARITY CHECK & DYNAMIC MERGING ---
+    let isDuplicateConfirmed = false;
+    let duplicateTargetIssue: any = null;
+
+    if (nearbyIssues.length > 0) {
+      const existingIssue = nearbyIssues[0];
+      console.log(`Analyzing duplicate potential against existing issue ID ${existingIssue.id} (Category: ${existingIssue.category})`);
+
+      try {
+        const similarityPrompt = `
+You are a senior civic infrastructure dispatcher. Compare these two reports of civic infrastructure issues reported within 20 meters of each other.
+Determine if they describe the exact same physical infrastructure issue (e.g., the same pothole, the same water leak, the same trash pile, the same dead streetlight) or if they are separate/unrelated issues.
+
+Existing Report:
+- Category: ${existingIssue.category}
+- Description: "${existingIssue.description || "No description provided."}"
+
+New Report:
+- Category: ${category || "Other"} ${custom_category_note ? `(Custom Note: ${custom_category_note})` : ""}
+- Description: "${description || "No description provided."}"
+
+Respond with a JSON object containing EXACTLY these two fields:
+1. "isDuplicate": boolean (true if both reports describe the exact same physical infrastructure issue, false otherwise).
+2. "reasoning": string (a short explanation of your decision).
+`;
+
+        const similarityResponse = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: { parts: [{ text: similarityPrompt }] },
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: "OBJECT",
+              properties: {
+                isDuplicate: {
+                  type: "BOOLEAN",
+                  description: "True if both reports describe the exact same infrastructure issue, False otherwise."
+                },
+                reasoning: {
+                  type: "STRING",
+                  description: "A short, objective summary explaining why they are or are not the same issue."
+                }
+              },
+              required: ["isDuplicate", "reasoning"]
+            }
+          }
+        });
+
+        const similarityResult = JSON.parse(similarityResponse.text?.trim() || "{}");
+        if (similarityResult.isDuplicate === true) {
+          isDuplicateConfirmed = true;
+          duplicateTargetIssue = existingIssue;
+          console.log(`Gemini confirmed duplicate of Issue ID ${existingIssue.id}. Reasoning: ${similarityResult.reasoning}`);
+        } else {
+          console.log(`Gemini determined they are distinct issues. Reasoning: ${similarityResult.reasoning}`);
+        }
+      } catch (simErr) {
+        console.error("Semantic Similarity check failed, continuing as distinct issue:", simErr);
       }
     }
 
-    // 5. Query Google Gemini model (gemini-3.5-flash) with structured JSON schema
+    if (isDuplicateConfirmed && duplicateTargetIssue) {
+      console.log(`DEDUPLICATION TRIGGERED: Merging report ${id} into existing issue ${duplicateTargetIssue.id}`);
+      
+      // Delete the newly inserted duplicate row so no redundant row exists (c. Do NOT create a new row)
+      const { error: deleteErr } = await supabase
+        .from("issues")
+        .delete()
+        .eq("id", id);
+      
+      if (deleteErr) {
+        console.error(`Failed to delete duplicate row ${id}:`, deleteErr.message);
+      }
+
+      // Aggregate report logs
+      const nextReportCount = (duplicateTargetIssue.report_count || 1) + 1;
+      const timestamp = new Date().toISOString();
+      const newLogEntry = `[${timestamp}] Duplicate Report: "${description || "No description provided."}"`;
+      const nextAuditLog = duplicateTargetIssue.audit_log 
+        ? `${duplicateTargetIssue.audit_log}\n${newLogEntry}`
+        : `[Original Report] "${duplicateTargetIssue.description || "No description provided."}"\n${newLogEntry}`;
+      
+      const nextPrecedence = (duplicateTargetIssue.precedence || 1) + 1;
+
+      // Update existing issue row
+      const { error: updateErr } = await supabase
+        .from("issues")
+        .update({
+          report_count: nextReportCount,
+          audit_log: nextAuditLog,
+          precedence: nextPrecedence,
+          ai_advice: `AI Deduplication Active: Merged multiple user reports. Total dispatches: ${nextReportCount}. Ready for urgent resolver action.`
+        })
+        .eq("id", duplicateTargetIssue.id);
+
+      if (updateErr) {
+        console.warn("Schema does not support report_count/audit_log. Applying resilient text fallback in ai_advice...", updateErr.message);
+        // Fallback update
+        await supabase
+          .from("issues")
+          .update({
+            precedence: nextPrecedence,
+            ai_advice: `${duplicateTargetIssue.ai_advice || ""}\n\n[Duplicate Report - ${timestamp}] ${description || "No description provided."}`
+          })
+          .eq("id", duplicateTargetIssue.id);
+      }
+
+      return new Response(JSON.stringify({ 
+        success: true, 
+        duplicate: true, 
+        mergedInto: duplicateTargetIssue.id,
+        assessment: { category: duplicateTargetIssue.category, severity: duplicateTargetIssue.severity_level || "Medium" }
+      }), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        status: 200,
+      });
+    }
+
+    // --- REGULAR DISPATCH PIPELINE ---
+    console.log(`Processing Ticket ID: ${id} as a distinct issue. Preparing standard Gemini Smart Dispatch analysis...`);
+
+    // Add text prompt specifying analysis and custom category rules
+    const textPrompt = `
+You are a senior civic infrastructure dispatcher. Analyze the following reported issue to classify its category and assess its severity.
+
+Original Reported Category: "${category || "Other"}"
+Custom Category Note (if provided): "${custom_category_note || "None"}"
+Issue Description: "${description || "No description provided."}"
+
+Classification Rules:
+1. If the user selected 'Other' and provided a 'Custom Category Note', analyze this note carefully to see if it can be mapped to one of our core categories:
+   - "Pothole" (e.g. potholes, road damage, cracks, broken pavements)
+   - "Water Leakage" (e.g. water leaks, pipe bursts, flooded streets, sewage overflow)
+   - "Waste Overflow" (e.g. overflowing trash bins, street litter, dirty block piles)
+   - "Dead Streetlight" (e.g. non-functional lamp, dark lanes)
+   Otherwise, if it does not match, it should remain categorized as "Other".
+2. Assess the severity priority as one of: "High", "Medium", or "Low".
+
+You must respond with a JSON object containing EXACTLY these two fields:
+1. "severity": String must be one of: "High", "Medium", "Low".
+2. "category": String must be one of: "Pothole", "Water Leakage", "Waste Overflow", "Dead Streetlight", "Other".
+
+Provide a precise, objective evaluation.
+`;
+
+    // Query Google Gemini model (gemini-3.5-flash) with structured JSON schema
     const response = await ai.models.generateContent({
       model: "gemini-3.5-flash",
-      contents: { parts: contents },
+      contents: { parts: [{ text: textPrompt }] },
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -119,7 +278,7 @@ Provide a precise, objective evaluation.
             },
             category: {
               type: "STRING",
-              description: "The classified infrastructure category: 'Road Damage', 'Water Logging', or 'Other'."
+              description: "The classified infrastructure category: 'Pothole', 'Water Leakage', 'Waste Overflow', 'Dead Streetlight', or 'Other'."
             }
           },
           required: ["severity", "category"]
@@ -130,13 +289,12 @@ Provide a precise, objective evaluation.
     const responseText = response.text?.trim() || "";
     console.log("Raw Gemini AI response received:", responseText);
 
-    // 6. Parse and validate JSON outcome
+    // Parse and validate JSON outcome
     let aiAssessment: { severity: string; category: string };
     try {
       aiAssessment = JSON.parse(responseText);
     } catch (parseErr) {
       console.warn("Failed to parse Gemini JSON output. Attempting regex extract...", parseErr);
-      // Regex fallback just in case Deno JSON parser fails on minor markdown wrapping
       const severityMatch = responseText.match(/"severity"\s*:\s*"([^"]+)"/i);
       const categoryMatch = responseText.match(/"category"\s*:\s*"([^"]+)"/i);
       aiAssessment = {
@@ -151,19 +309,24 @@ Provide a precise, objective evaluation.
     else if (aiAssessment.severity?.toLowerCase().includes("low")) finalSeverity = "Low";
 
     let finalCategory = "Other";
-    if (aiAssessment.category?.toLowerCase().includes("road") || aiAssessment.category?.toLowerCase().includes("damage")) {
-      finalCategory = "Road Damage";
-    } else if (aiAssessment.category?.toLowerCase().includes("water") || aiAssessment.category?.toLowerCase().includes("log")) {
-      finalCategory = "Water Logging";
+    const mappedCat = aiAssessment.category?.toLowerCase() || "";
+    if (mappedCat.includes("pothole") || mappedCat.includes("road") || mappedCat.includes("damage")) {
+      finalCategory = "Pothole";
+    } else if (mappedCat.includes("water") || mappedCat.includes("leak") || mappedCat.includes("log")) {
+      finalCategory = "Water Leakage";
+    } else if (mappedCat.includes("waste") || mappedCat.includes("trash") || mappedCat.includes("garbage") || mappedCat.includes("overflow")) {
+      finalCategory = "Waste Overflow";
+    } else if (mappedCat.includes("light") || mappedCat.includes("street") || mappedCat.includes("lamp")) {
+      finalCategory = "Dead Streetlight";
     }
 
     console.log(`Smart Dispatch Assessment: Category classified as "${finalCategory}", Severity assessed as "${finalSeverity}".`);
 
-    // 7. Update row with AI results
+    // Update row with AI results
     const { error: dbError } = await supabase
       .from("issues")
       .update({
-        severity_level: finalSeverity, // Map as needed for your database schema columns
+        severity_level: finalSeverity,
         category: finalCategory,
         status: "Pending", // Ensure it is set to 'Pending' on successful analysis
         ai_advice: `AI Smart Dispatch categorized this under ${finalCategory} with ${finalSeverity} priority. Ready for municipal review.`,
@@ -176,7 +339,7 @@ Provide a precise, objective evaluation.
 
     console.log(`Ticket ID ${id} successfully processed and updated.`);
 
-    return new Response(JSON.stringify({ success: true, assessment: { category: finalCategory, severity: finalSeverity } }), {
+    return new Response(JSON.stringify({ success: true, duplicate: false, assessment: { category: finalCategory, severity: finalSeverity } }), {
       headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
       status: 200,
     });
@@ -184,7 +347,7 @@ Provide a precise, objective evaluation.
   } catch (err: any) {
     console.error("Smart Dispatch pipeline encountered an error:", err.message);
 
-    // 8. Error Handling Fallback: Ensure status defaults to 'Pending'
+    // Fallback recovery: Ensure status defaults to 'Pending'
     try {
       const payload = await req.clone().json().catch(() => ({}));
       const recordId = payload.record?.id;
