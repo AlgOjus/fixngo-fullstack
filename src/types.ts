@@ -15,6 +15,7 @@ export interface CommunityIssue {
   aiAdvice?: string;
   description?: string;
   resolution_feedback?: string;
+  reporterId?: string | null;
 }
 
 export type InfrastructureIssue = CommunityIssue;

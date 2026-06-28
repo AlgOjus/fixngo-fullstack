@@ -349,8 +349,13 @@ export default function UnifiedLogin({
         return;
       }
 
+      // Determine final redirect URL, defaulting to the official live site domain
+      const finalRedirectUrl = window.location.origin && !window.location.origin.includes('localhost')
+        ? `${window.location.origin}/update-password`
+        : 'https://fixngo-419142040910.asia-southeast1.run.app/update-password';
+
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: 'http://localhost:5173/update-password',
+        redirectTo: finalRedirectUrl,
       });
 
       if (resetError) {
@@ -731,24 +736,7 @@ export default function UnifiedLogin({
           </>
         )}
 
-        {/* Demo Helper box */}
-        <div className="bg-slate-950/60 rounded-xl p-4 border border-slate-850 text-[10px] text-slate-500 space-y-1">
-          <p className="font-bold text-slate-400 uppercase tracking-wider">Preseeded Dev Accounts:</p>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <span className="text-orange-400 font-semibold block">Citizen:</span>
-              <span>citizen@example.com / password123</span>
-            </div>
-            <div>
-              <span className="text-emerald-400 font-semibold block">Resolver:</span>
-              <span>resolver@example.com / password123</span>
-            </div>
-          </div>
-          <div className="pt-2 border-t border-slate-900">
-            <span className="text-red-400 font-semibold block">Admin Key / Email:</span>
-            <span>admin_fixngo / super_secure_password_2026</span>
-          </div>
-        </div>
+
 
       </div>
     </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ArrowRight, User, Wrench, Sparkles, Activity, ShieldAlert, Lock, ArrowLeft } from 'lucide-react';
 import { InfrastructureIssue, UserAccount } from './types';
 import { supabase } from './lib/supabase';
@@ -106,7 +106,14 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<'landing' | 'login' | 'citizen' | 'resolver' | 'admin' | 'update-password'>(getInitialTab);
   const [notification, setNotification] = useState<{ message: string; type: string } | null>(null);
-  const [userPoints, setUserPoints] = useState(130);
+  const [userPoints, setUserPoints] = useState<number>(() => {
+    const saved = safeGetItem('fix_n_go_user_points');
+    return saved ? parseInt(saved, 10) : 0;
+  });
+
+  useEffect(() => {
+    safeSetItem('fix_n_go_user_points', userPoints.toString());
+  }, [userPoints]);
   
   // Mock User Database for transition to PostgreSQL/Supabase Auth
   const [mockUserDatabase, setMockUserDatabase] = useState<UserAccount[]>(() => {
@@ -156,6 +163,11 @@ export default function App() {
     return null;
   });
 
+  const currentUserRef = useRef<UserAccount | null>(currentUser);
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
   // Sync user list and session to localStorage
   useEffect(() => {
     safeSetItem('fix_n_go_users', JSON.stringify(mockUserDatabase));
@@ -168,6 +180,36 @@ export default function App() {
       safeRemoveItem('fix_n_go_current_user');
     }
   }, [currentUser]);
+
+  // Sync user points to Supabase profiles table when they change
+  useEffect(() => {
+    const syncPoints = async () => {
+      if (currentUser && currentUser.id) {
+        const isSupabaseConfigured = 
+          import.meta.env.VITE_SUPABASE_URL && 
+          import.meta.env.VITE_SUPABASE_URL !== 'https://your-project-id.supabase.co' &&
+          import.meta.env.VITE_SUPABASE_ANON_KEY &&
+          import.meta.env.VITE_SUPABASE_ANON_KEY !== 'your-supabase-anon-key';
+
+        if (isSupabaseConfigured) {
+          try {
+            const { error } = await supabase
+              .from('profiles')
+              .update({ points: userPoints })
+              .eq('id', currentUser.id);
+            if (error) {
+              console.warn("Could not save user points to database (points column might not exist):", error.message);
+            } else {
+              console.log("User points updated in database profiles table:", userPoints);
+            }
+          } catch (err) {
+            console.warn("Error updating user points in database profiles table:", err);
+          }
+        }
+      }
+    };
+    syncPoints();
+  }, [userPoints, currentUser]);
 
   // Detect database errors / OAuth errors in the URL on mount and clear stale sessions
   useEffect(() => {
@@ -248,6 +290,29 @@ export default function App() {
       }
     };
 
+    // Helper to fetch and restore user points from Supabase
+    const fetchAndSetUserPoints = async (userId: string) => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('points')
+          .eq('id', userId)
+          .single();
+        
+        if (error) {
+          console.warn("Could not fetch user points from database:", error.message);
+        } else if (data && data.points !== undefined && data.points !== null) {
+          const pts = typeof data.points === 'number' ? data.points : parseInt(data.points, 10);
+          if (!isNaN(pts)) {
+            setUserPoints(pts);
+            safeSetItem('fix_n_go_user_points', pts.toString());
+          }
+        }
+      } catch (err) {
+        console.warn("Error fetching points from profiles table:", err);
+      }
+    };
+
     // Retrieve active session (handles post-redirect login)
     const checkSession = async () => {
       try {
@@ -274,6 +339,9 @@ export default function App() {
           
           // Trigger client-side self-healing profile sync
           await syncUserProfile(user.id, user.email || '', fullName, checkedRole);
+
+          // Restore user points from Supabase profile
+          await fetchAndSetUserPoints(user.id);
         }
       } catch (err) {
         console.warn("Error restoring Supabase session on mount:", err);
@@ -313,8 +381,13 @@ export default function App() {
 
           // Trigger client-side self-healing profile sync
           await syncUserProfile(user.id, user.email || '', fullName, checkedRole);
+
+          // Restore user points from Supabase profile
+          await fetchAndSetUserPoints(user.id);
         } else if (event === 'SIGNED_OUT') {
           setCurrentUser(null);
+          setUserPoints(0);
+          safeRemoveItem('fix_n_go_user_points');
           setActiveTab('landing');
         }
       }
@@ -325,7 +398,7 @@ export default function App() {
     };
   }, []);
 
-  // Fetch real issues from Supabase if configured
+  // Fetch real issues from Supabase if configured, with polling and real-time sync to catch external deletes
   useEffect(() => {
     const isSupabaseConfigured = 
       import.meta.env.VITE_SUPABASE_URL && 
@@ -346,7 +419,7 @@ export default function App() {
           return;
         }
 
-        if (data && data.length > 0) {
+        if (data) {
           const mapped: InfrastructureIssue[] = data.map(item => {
             // Clean up legacy ID format if present
             let cleanId = item.id;
@@ -377,19 +450,13 @@ export default function App() {
               imageUrl: item.image_url || item.imageUrl || 'https://images.unsplash.com/photo-1515162305285-0293e4767cc2?auto=format&fit=crop&q=80&w=600',
               resolvedImageUrl: item.resolved_image_url || item.resolvedImageUrl,
               workerNotes: item.worker_notes || item.workerNotes,
-              aiAdvice: item.ai_advice || item.aiAdvice || 'Standard civic caution is recommended around the affected block.'
+              aiAdvice: item.ai_advice || item.aiAdvice || 'Standard civic caution is recommended around the affected block.',
+              reporterId: item.reporter_id
             };
           });
 
-          setIssues(prev => {
-            const merged = [...mapped];
-            prev.forEach(localItem => {
-              if (!merged.some(dbItem => dbItem.id === localItem.id)) {
-                merged.push(localItem);
-              }
-            });
-            return merged;
-          });
+          // Correct the bug where local/prev issues was merging and adding back deleted database rows
+          setIssues(mapped);
         }
       } catch (err) {
         console.warn("Error loading issues from database:", err);
@@ -397,6 +464,213 @@ export default function App() {
     };
 
     fetchIssues();
+
+    // Poll the database every 5 seconds so that external deletions are picked up seamlessly
+    const pollInterval = setInterval(fetchIssues, 5000);
+
+    // Subscribe to real-time events on the issues table
+    const issuesChannel = supabase
+      .channel('public:issues')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'issues' },
+        (payload) => {
+          console.log('Real-time database payload received in App:', payload);
+          if (payload.eventType === 'INSERT') {
+            const newItem = payload.new;
+            setIssues(prev => {
+              if (prev.some(x => x.id === newItem.id)) return prev;
+              const mapped: InfrastructureIssue = {
+                id: newItem.id,
+                category: newItem.category || 'Pothole',
+                lat: Number(newItem.lat) || 28.6139,
+                lng: Number(newItem.lng) || 77.2090,
+                severity: Number(newItem.severity) || 5,
+                status: newItem.status || 'Pending',
+                precedence: Number(newItem.precedence) || 1,
+                distance: newItem.distance || 'Nearby',
+                imageUrl: newItem.image_url || newItem.imageUrl || 'https://images.unsplash.com/photo-1515162305285-0293e4767cc2?auto=format&fit=crop&q=80&w=600',
+                resolvedImageUrl: newItem.resolved_image_url || newItem.resolvedImageUrl,
+                workerNotes: newItem.worker_notes || newItem.workerNotes,
+                aiAdvice: newItem.ai_advice || newItem.aiAdvice || 'Standard civic caution is recommended around the affected block.'
+              };
+              return [mapped, ...prev];
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedItem = payload.new;
+            setIssues(prev => prev.map(x => {
+              if (x.id === updatedItem.id) {
+                return {
+                  ...x,
+                  category: updatedItem.category || x.category,
+                  lat: Number(updatedItem.lat) || x.lat,
+                  lng: Number(updatedItem.lng) || x.lng,
+                  severity: Number(updatedItem.severity) || x.severity,
+                  status: updatedItem.status || x.status,
+                  precedence: Number(updatedItem.precedence) || x.precedence,
+                  imageUrl: updatedItem.image_url || updatedItem.imageUrl || x.imageUrl,
+                  resolvedImageUrl: updatedItem.resolved_image_url || updatedItem.resolvedImageUrl || x.resolvedImageUrl,
+                  workerNotes: updatedItem.worker_notes || updatedItem.workerNotes || x.workerNotes,
+                  aiAdvice: updatedItem.ai_advice || updatedItem.aiAdvice || x.aiAdvice
+                };
+              }
+              return x;
+            }));
+          } else if (payload.eventType === 'DELETE') {
+            const oldItem = payload.old;
+            setIssues(prev => prev.filter(x => x.id !== oldItem.id));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      clearInterval(pollInterval);
+      supabase.removeChannel(issuesChannel);
+    };
+  }, []);
+
+  // Fetch real profiles from Supabase if configured, with polling and real-time sync to catch external deletes
+  useEffect(() => {
+    const isSupabaseConfigured = 
+      import.meta.env.VITE_SUPABASE_URL && 
+      import.meta.env.VITE_SUPABASE_URL !== 'https://your-project-id.supabase.co' &&
+      import.meta.env.VITE_SUPABASE_ANON_KEY &&
+      import.meta.env.VITE_SUPABASE_ANON_KEY !== 'your-supabase-anon-key';
+
+    if (!isSupabaseConfigured) return;
+
+    const fetchProfiles = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*');
+
+        if (error) {
+          console.warn("Could not retrieve profiles from Supabase table:", error.message);
+          return;
+        }
+
+        if (data) {
+          const mapped: UserAccount[] = data.map(item => ({
+            id: item.id,
+            fullName: item.full_name || 'User',
+            email: item.email || '',
+            password: '',
+            role: item.role || 'citizen',
+            createdAt: item.created_at || new Date().toISOString()
+          }));
+
+          setMockUserDatabase(prev => {
+            const merged = [...prev];
+            mapped.forEach(dbUser => {
+              const idx = merged.findIndex(u => u.id === dbUser.id || u.email === dbUser.email);
+              if (idx !== -1) {
+                merged[idx] = { 
+                  ...merged[idx], 
+                  id: dbUser.id,
+                  fullName: dbUser.fullName,
+                  email: dbUser.email,
+                  role: dbUser.role,
+                  createdAt: dbUser.createdAt
+                };
+              } else {
+                merged.push(dbUser);
+              }
+            });
+            return merged.filter(user => {
+              const isSupabaseId = user.id && user.id.length > 15 && user.id !== 'user-admin' && user.id !== 'user-citizen' && user.id !== 'user-resolver';
+              if (isSupabaseId) {
+                return mapped.some(m => m.id === user.id);
+              }
+              return true;
+            });
+          });
+
+          // Check if current user profile was deleted
+          const curr = currentUserRef.current;
+          if (curr) {
+            const isSupabaseUser = curr.id && curr.id.length > 15 && curr.id !== 'user-admin' && curr.id !== 'user-citizen' && curr.id !== 'user-resolver';
+            if (isSupabaseUser) {
+              const stillExists = mapped.some(m => m.id === curr.id);
+              if (!stillExists) {
+                console.warn("Logged in user profile was deleted from Supabase. Revoking session.");
+                setCurrentUser(null);
+                safeRemoveItem('fix_n_go_current_user');
+                setActiveTab('landing');
+                showNotification('Your profile has been removed from the central grid registry.', 'warning');
+                supabase.auth.signOut().catch(e => console.warn(e));
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Error loading profiles from database:", err);
+      }
+    };
+
+    fetchProfiles();
+
+    // Poll database every 5 seconds for user profile deletions
+    const pollInterval = setInterval(fetchProfiles, 5000);
+
+    // Subscribe to real-time events on the profiles table
+    const profilesChannel = supabase
+      .channel('public:profiles')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'profiles' },
+        (payload) => {
+          console.log('Real-time database payload received for profiles:', payload);
+          if (payload.eventType === 'INSERT') {
+            const newUser = payload.new;
+            setMockUserDatabase(prev => {
+              if (prev.some(x => x.id === newUser.id)) return prev;
+              const mapped: UserAccount = {
+                id: newUser.id,
+                fullName: newUser.full_name || 'User',
+                email: newUser.email || '',
+                password: '',
+                role: newUser.role || 'citizen',
+                createdAt: newUser.created_at || new Date().toISOString()
+              };
+              return [...prev, mapped];
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedUser = payload.new;
+            setMockUserDatabase(prev => prev.map(x => {
+              if (x.id === updatedUser.id) {
+                return {
+                  ...x,
+                  fullName: updatedUser.full_name || x.fullName,
+                  email: updatedUser.email || x.email,
+                  role: updatedUser.role || x.role
+                };
+              }
+              return x;
+            }));
+          } else if (payload.eventType === 'DELETE') {
+            const oldUser = payload.old;
+            setMockUserDatabase(prev => prev.filter(x => x.id !== oldUser.id));
+            
+            const curr = currentUserRef.current;
+            if (curr && curr.id === oldUser.id) {
+              console.warn("Logged in user profile was deleted in real-time. Revoking session.");
+              setCurrentUser(null);
+              safeRemoveItem('fix_n_go_current_user');
+              setActiveTab('landing');
+              showNotification('Your profile has been removed from the central grid registry.', 'warning');
+              supabase.auth.signOut().catch(e => console.warn(e));
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      clearInterval(pollInterval);
+      supabase.removeChannel(profilesChannel);
+    };
   }, []);
 
   // Login simulated status (kept for legacy component prop compatibility, synced automatically)
@@ -660,9 +934,8 @@ export default function App() {
         const fileExt = uploadedFile.name.split('.').pop() || 'jpg';
         const fileName = `${Date.now()}-${Math.floor(Math.random() * 100000)}.${fileExt}`;
         
-        // 1. Sequentially try uploading to 'issue-images', 'pothole-images', and 'issues'
+        // Upload strictly to 'issue-images' public bucket as configured
         let uploadData = null;
-        let uploadError = null;
         let chosenBucket = 'issue-images';
 
         const { data: upData1, error: err1 } = await supabase.storage
@@ -674,36 +947,9 @@ export default function App() {
 
         if (upData1) {
           uploadData = upData1;
-          chosenBucket = 'issue-images';
         } else {
-          console.warn("Storage upload to 'issue-images' failed, trying 'pothole-images'...", err1?.message);
-          const { data: upData2, error: err2 } = await supabase.storage
-            .from('pothole-images')
-            .upload(fileName, uploadedFile, {
-              cacheControl: '3600',
-              upsert: false
-            });
-
-          if (upData2) {
-            uploadData = upData2;
-            chosenBucket = 'pothole-images';
-          } else {
-            console.warn("Storage upload to 'pothole-images' failed, trying 'issues'...", err2?.message);
-            const { data: upData3, error: err3 } = await supabase.storage
-              .from('issues')
-              .upload(fileName, uploadedFile, {
-                cacheControl: '3600',
-                upsert: false
-              });
-
-            if (upData3) {
-              uploadData = upData3;
-              chosenBucket = 'issues';
-            } else {
-              uploadError = err3 || err2 || err1;
-              console.error("All Supabase bucket uploads failed. Error:", uploadError?.message);
-            }
-          }
+          console.error("Storage upload to 'issue-images' failed:", err1?.message);
+          showNotification("Storage Upload Failed: Please ensure you have created a public bucket named 'issue-images' in Supabase.", "warning");
         }
 
         if (uploadData) {
@@ -744,29 +990,54 @@ export default function App() {
       distance: 'Nearby',
       imageUrl: finalImg,
       beforeImageUrl: beforeImageUrl || finalImg,
-      aiAdvice: advice
+      aiAdvice: advice,
+      reporterId: currentUser?.id || null
     };
 
     if (isSupabaseConfigured) {
       try {
-        // 3. Finally, insert the new row into the 'issues' table, with before_image_url and Pending status
+        const parseDistanceToNumber = (distanceStr: string | number | undefined): number => {
+          if (distanceStr === undefined || distanceStr === null) return 100;
+          if (typeof distanceStr === 'number') return distanceStr;
+          
+          const cleanStr = distanceStr.toString().toLowerCase().trim();
+          if (cleanStr === 'nearby') return 50;
+          
+          const matches = cleanStr.match(/^([\d.]+)\s*(m|km)?$/);
+          if (matches) {
+            const val = parseFloat(matches[1]);
+            const unit = matches[2];
+            if (unit === 'km') {
+              return val * 1000;
+            }
+            return val;
+          }
+          
+          const parsed = parseFloat(cleanStr);
+          return isNaN(parsed) ? 100 : parsed;
+        };
+
+        // 3. Finally, insert the new row into the 'issues' table, matching the exact schema columns
         const { error: dbError } = await supabase
           .from('issues')
           .insert({
             id: newIssue.id,
-            category: newIssue.category,
-            lat: newIssue.lat,
-            lng: newIssue.lng,
+            title: `${newIssue.category} Reported`,
+            description: description,
+            status: 'Pending', // matches database status
             location: `SRID=4326;POINT(${lng} ${lat})`,
-            severity: newIssue.severity,
-            status: 'Pending', // matches database issue_status_enum
-            precedence: newIssue.precedence,
-            distance: newIssue.distance,
-            image_url: newIssue.imageUrl,
             before_image_url: beforeImageUrl || finalImg,
-            ai_advice: newIssue.aiAdvice,
+            after_image_url: null,
+            reporter_id: currentUser?.id || null,
+            worker_id: null,
             created_at: new Date().toISOString(),
-            custom_category_note: newIssueCategory === 'Other' ? customCategoryNote : null
+            updated_at: new Date().toISOString(),
+            ai_advice: newIssue.aiAdvice,
+            category: newIssue.category,
+            custom_category_note: newIssueCategory === 'Other' ? customCategoryNote : null,
+            severity: newIssue.severity,
+            distance: parseDistanceToNumber(newIssue.distance),
+            image_url: finalImg
           });
 
         if (dbError) {
@@ -867,8 +1138,13 @@ export default function App() {
             onClick={() => handleTabChange('landing')} 
             className="flex items-center gap-3 cursor-pointer group"
           >
-            <div className="bg-orange-500 text-slate-950 font-extrabold px-3 py-1.5 rounded-xl leading-none font-mono text-base shadow-[0_0_15px_rgba(249,115,22,0.3)] transition-transform group-hover:scale-105">
-              FG
+            <div className="w-10 h-10 flex items-center justify-center rounded-xl bg-slate-900 border border-orange-500/30 shadow-[0_0_15px_rgba(249,115,22,0.15)] transition-all group-hover:scale-105 group-hover:border-orange-500/50">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" className="w-7 h-7">
+                <path d="M50 15 C38 15 30 23 30 35 C30 47 50 72 50 72 C50 72 70 47 70 35 C70 23 62 15 50 15 Z" fill="#f97316" />
+                <circle cx="50" cy="35" r="12" fill="#090d16" />
+                <rect x="46" y="35" width="8" height="22" rx="2" fill="#090d16" />
+                <circle cx="50" cy="35" r="5" fill="#f97316" />
+              </svg>
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-1">
@@ -1097,7 +1373,7 @@ export default function App() {
                issues={issues}
                setIssues={setIssues}
                showNotification={showNotification}
-               bypassAuth={true}
+               bypassAuth={true} setMockUserDatabase={setMockUserDatabase}
                mockUserDatabase={mockUserDatabase}
                currentUser={currentUser}
              />
@@ -1112,7 +1388,7 @@ export default function App() {
       </main>
 
       {/* Persistent Footer */}
-      <footer className="w-full bg-slate-950 border-t border-slate-900 py-6 mt-12 text-center text-xs text-slate-500">
+      <footer className="w-full bg-slate-950 border-t border-slate-900 py-6 mt-12 text-center text-xs text-slate-500 space-y-2">
         <p>© {new Date().getFullYear()} FixNGo. Action-Driven Civic Infrastructure Dispatch. All rights reserved.</p>
       </footer>
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { ShieldAlert, Terminal, Eye, EyeOff, AlertTriangle, Database, Trash2, CheckCircle, Users } from 'lucide-react';
+import { ShieldAlert, Terminal, Eye, EyeOff, AlertTriangle, Database, Trash2, CheckCircle, Users, UserX } from 'lucide-react';
 import { InfrastructureIssue, UserAccount } from '../types';
+import { supabase } from '../lib/supabase';
 
 interface AdminConsoleProps {
   issues: InfrastructureIssue[];
@@ -8,8 +9,15 @@ interface AdminConsoleProps {
   showNotification: (msg: string, type?: string) => void;
   bypassAuth?: boolean;
   mockUserDatabase?: UserAccount[];
+  setMockUserDatabase?: React.Dispatch<React.SetStateAction<UserAccount[]>>;
   currentUser?: UserAccount | null;
 }
+
+const isSupabaseConfigured = 
+  import.meta.env.VITE_SUPABASE_URL && 
+  import.meta.env.VITE_SUPABASE_URL !== 'https://your-project-id.supabase.co' &&
+  import.meta.env.VITE_SUPABASE_ANON_KEY &&
+  import.meta.env.VITE_SUPABASE_ANON_KEY !== 'your-supabase-anon-key';
 
 export default function AdminConsole({ 
   issues, 
@@ -17,6 +25,7 @@ export default function AdminConsole({
   showNotification, 
   bypassAuth = false,
   mockUserDatabase = [],
+  setMockUserDatabase,
   currentUser = null
 }: AdminConsoleProps) {
   const [username, setUsername] = useState('');
@@ -36,16 +45,76 @@ export default function AdminConsole({
     }
   };
 
-  const handleOverrideStatus = (id: string, newStatus: 'Pending' | 'In Progress' | 'Resolved') => {
+  const handleOverrideStatus = async (id: string, newStatus: 'Pending' | 'In Progress' | 'Resolved') => {
     setIssues(prev => prev.map(issue => 
       issue.id === id ? { ...issue, status: newStatus, workerNotes: newStatus === 'Resolved' ? 'Administrative Overridden Resolution' : undefined } : issue
     ));
+
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase
+          .from('issues')
+          .update({ 
+            status: newStatus, 
+            worker_notes: newStatus === 'Resolved' ? 'Administrative Overridden Resolution' : null 
+          })
+          .eq('id', id);
+        if (error) {
+          console.error("Failed to update status in Supabase:", error.message);
+        }
+      } catch (err) {
+        console.error("Exception updating issue status:", err);
+      }
+    }
+
     showNotification(`Administrative Override triggered for ticket ${id}: Status set to ${newStatus}`, 'success');
   };
 
-  const handleDropTicket = (id: string) => {
+  const handleDropTicket = async (id: string) => {
     setIssues(prev => prev.filter(issue => issue.id !== id));
+
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase
+          .from('issues')
+          .delete()
+          .eq('id', id);
+        if (error) {
+          console.error("Failed to delete issue from Supabase:", error.message);
+        }
+      } catch (err) {
+        console.error("Exception deleting issue:", err);
+      }
+    }
+
     showNotification(`Ticket ${id} permanently purged from system database ledger`, 'warning');
+  };
+
+  const handleDeleteUser = async (userId: string) => {
+    if (userId === 'user-admin' || userId === currentUser?.id) {
+      showNotification("Cannot delete active system administrator session.", "warning");
+      return;
+    }
+
+    if (setMockUserDatabase) {
+      setMockUserDatabase(prev => prev.filter(u => u.id !== userId));
+    }
+
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase
+          .from('profiles')
+          .delete()
+          .eq('id', userId);
+        if (error) {
+          console.error("Failed to delete user profile from Supabase:", error.message);
+        }
+      } catch (err) {
+        console.error("Exception deleting user profile:", err);
+      }
+    }
+
+    showNotification(`User account ${userId} successfully removed from central directory`, 'warning');
   };
 
   if (!isAuthenticated) {
@@ -294,7 +363,8 @@ export default function AdminConsole({
                 <th className="pb-2">Email Address</th>
                 <th className="pb-2">Role</th>
                 <th className="pb-2">Session Status</th>
-                <th className="pb-2 text-right">Created Date</th>
+                <th className="pb-2">Created Date</th>
+                <th className="pb-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/40 text-slate-300">
@@ -337,8 +407,21 @@ export default function AdminConsole({
                         </span>
                       )}
                     </td>
-                    <td className="py-3 text-slate-400 font-mono text-right">
+                    <td className="py-3 text-slate-400 font-mono">
                       {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}
+                    </td>
+                    <td className="py-3 text-right">
+                      {user.id !== 'user-admin' && user.id !== currentUser?.id ? (
+                        <button
+                          onClick={() => handleDeleteUser(user.id)}
+                          className="bg-red-500/10 text-red-400 border border-red-500/20 p-1.5 rounded hover:bg-red-500/20 transition cursor-pointer inline-flex items-center justify-center"
+                          title="Delete User Profile"
+                        >
+                          <UserX className="w-3.5 h-3.5" />
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-slate-600 italic">Protected</span>
+                      )}
                     </td>
                   </tr>
                 );

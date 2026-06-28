@@ -99,9 +99,11 @@ export default function GuestPortal({
         {/* Background glowing effects */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[700px] h-[300px] bg-orange-500/5 blur-[120px] rounded-full pointer-events-none -z-10" />
         
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-orange-500/20 bg-orange-500/5 text-orange-400 text-xs font-bold tracking-wider uppercase mb-8 shadow-[0_0_15px_rgba(249,115,22,0.1)]">
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>Next-Gen Action-Driven Dispatch</span>
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-8">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-orange-500/20 bg-orange-500/5 text-orange-400 text-xs font-bold tracking-wider uppercase shadow-[0_0_15px_rgba(249,115,22,0.1)]">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Next-Gen Action-Driven Dispatch</span>
+          </div>
         </div>
 
         <h2 className="text-4xl sm:text-6xl font-black tracking-tight text-white leading-[1.1] mb-6 font-display">

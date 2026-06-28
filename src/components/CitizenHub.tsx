@@ -66,6 +66,18 @@ export default function CitizenHub({
   // Filter and sort personal tickets by AI precedence score descending
   const personalTickets = issues
     .filter(iss => {
+      if (currentUser) {
+        if (currentUser.id === 'user-citizen') {
+          return (
+            iss.reporterId === currentUser.id ||
+            iss.id === '902a2026-8310-4d32-896b-9c6cc0ff2d34' ||
+            iss.id === '881f2026-8310-4d32-896b-9c6cc0ff2d34' ||
+            iss.id === '872c2026-8310-4d32-896b-9c6cc0ff2d34'
+          );
+        }
+        return iss.reporterId === currentUser.id;
+      }
+
       let reportedIds: string[] = [];
       try {
         reportedIds = JSON.parse(localStorage.getItem('my_reported_issue_ids') || '[]');
@@ -210,14 +222,6 @@ export default function CitizenHub({
                     })()} (You)
                   </span>
                   <span className="text-indigo-400 font-bold font-mono">{userPoints} pts</span>
-                </div>
-                <div className="flex justify-between p-2 bg-slate-950/20 rounded">
-                  <span className="text-slate-400">2. Priya V.</span>
-                  <span className="text-slate-500 font-mono">90 pts</span>
-                </div>
-                <div className="flex justify-between p-2 bg-slate-950/20 rounded">
-                  <span className="text-slate-400">3. Rahul M.</span>
-                  <span className="text-slate-500 font-mono">85 pts</span>
                 </div>
               </div>
             </div>
