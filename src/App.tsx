@@ -9,6 +9,7 @@ import UnifiedLogin from './components/UnifiedLogin';
 import CitizenHub from './components/CitizenHub';
 import ResolversPortal from './components/ResolversPortal';
 import AdminConsole from './components/AdminConsole';
+import UpdatePassword from './components/UpdatePassword';
 
 // Safe localStorage wrappers to prevent iframe SecurityError / DOMException crashes
 const safeGetItem = (key: string): string | null => {
@@ -94,6 +95,7 @@ export default function App() {
       const path = window.location.pathname;
       if (path === '/admin') return 'admin';
       if (path === '/login') return 'login';
+      if (path === '/update-password') return 'update-password';
       if (path === '/citizen' || path === '/citizen/dashboard') return 'citizen';
       if (path === '/worker' || path === '/worker/dispatch' || path === '/resolver') return 'resolver';
     } catch (e) {
@@ -102,7 +104,7 @@ export default function App() {
     return 'landing'; // Default landing view (Guest Portal)
   };
 
-  const [activeTab, setActiveTab] = useState<'landing' | 'login' | 'citizen' | 'resolver' | 'admin'>(getInitialTab);
+  const [activeTab, setActiveTab] = useState<'landing' | 'login' | 'citizen' | 'resolver' | 'admin' | 'update-password'>(getInitialTab);
   const [notification, setNotification] = useState<{ message: string; type: string } | null>(null);
   const [userPoints, setUserPoints] = useState(130);
   
@@ -424,7 +426,7 @@ export default function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // Synchronize path changes with pushState
-  const handleTabChange = (tab: 'landing' | 'login' | 'citizen' | 'resolver' | 'admin') => {
+  const handleTabChange = (tab: 'landing' | 'login' | 'citizen' | 'resolver' | 'admin' | 'update-password') => {
     setActiveTab(tab);
     try {
       let path = '/';
@@ -432,6 +434,7 @@ export default function App() {
       else if (tab === 'citizen') path = '/citizen/dashboard';
       else if (tab === 'resolver') path = '/worker/dispatch';
       else if (tab === 'admin') path = '/admin';
+      else if (tab === 'update-password') path = '/update-password';
       window.history.pushState({}, '', path);
     } catch (e) {
       console.warn("Failed to pushState in sandbox history:", e);
@@ -1026,9 +1029,20 @@ export default function App() {
           />
          )}
 
+         {activeTab === 'update-password' && (
+          <UpdatePassword 
+            showNotification={showNotification}
+            onRedirectToLogin={() => handleTabChange('login')}
+            onSuccessLogin={(user) => {
+              setCurrentUser(user);
+              safeSetItem('fix_n_go_current_user', JSON.stringify(user));
+            }}
+          />
+         )}
+
          {activeTab === 'citizen' && (
            currentUser && currentUser.role === 'citizen' ? (
-             <CitizenHub 
+             <CitizenHub currentUser={currentUser} 
                issues={issues}
                handleReportIssue={handleReportIssue}
                isAnalyzing={isAnalyzing}

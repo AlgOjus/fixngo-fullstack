@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Award, ClipboardList, User, Sparkles, Send, ArrowRight, ShieldCheck, Star } from 'lucide-react';
-import { InfrastructureIssue } from '../types';
+import { InfrastructureIssue, UserAccount } from '../types';
 import LocationInputResilient from './LocationInputResilient';
 import OperationalMap from './OperationalMap';
 import MediaCapture from './MediaCapture';
@@ -26,6 +26,7 @@ interface CitizenHubProps {
   userPoints: number;
   setUserPoints: React.Dispatch<React.SetStateAction<number>>;
   showNotification: (msg: string, type?: string) => void;
+  currentUser?: UserAccount | null;
 }
 
 export default function CitizenHub({
@@ -48,7 +49,8 @@ export default function CitizenHub({
   setUploadedFile,
   userPoints,
   setUserPoints,
-  showNotification
+  showNotification,
+  currentUser
 }: CitizenHubProps) {
 
   const [activeTab, setActiveTab] = useState<'status' | 'report'>('status');
@@ -196,7 +198,17 @@ export default function CitizenHub({
               
               <div className="space-y-2 text-xs">
                 <div className="flex justify-between p-2 bg-slate-950/40 rounded border border-slate-850">
-                  <span className="text-slate-300">1. Arjun S. (You)</span>
+                  <span className="text-slate-300">
+                    1. {(() => {
+                      if (!currentUser || !currentUser.fullName) return 'Arjun S.';
+                      const name = currentUser.fullName.trim();
+                      const parts = name.split(/\s+/);
+                      if (parts.length > 1) {
+                        return `${parts[0]} ${parts[1][0]}.`;
+                      }
+                      return name;
+                    })()} (You)
+                  </span>
                   <span className="text-indigo-400 font-bold font-mono">{userPoints} pts</span>
                 </div>
                 <div className="flex justify-between p-2 bg-slate-950/20 rounded">
