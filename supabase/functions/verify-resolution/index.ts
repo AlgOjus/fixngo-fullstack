@@ -208,8 +208,8 @@ You MUST output your assessment as a strict JSON object with exactly these keys:
       };
     }
 
-    // 7. Update status to 'RESOLVED' or 'Requires Review' + resolution_feedback
-    const targetStatus = verification.isResolved ? "RESOLVED" : "Requires Review";
+    // 7. Update status to 'Resolved' or 'Requires Review' + resolution_feedback
+    const targetStatus = verification.isResolved ? "Resolved" : "Requires Review";
     console.log(`[VerifyResolution] Updating Issue #${issueId}:
       - Status: ${targetStatus}
       - Feedback: ${verification.reasoning}`);

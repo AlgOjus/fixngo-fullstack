@@ -65,7 +65,20 @@ export default function AdminConsole({
           })
           .eq('id', id);
         if (error) {
-          console.error("Failed to update status in Supabase:", error.message);
+          const errorMsg = error.message?.toLowerCase() || '';
+          const isMissingColumn = errorMsg.includes('worker_notes') || errorMsg.includes('schema cache');
+          if (isMissingColumn) {
+            console.warn("worker_notes column missing or cached incorrectly. Retrying update without worker_notes...");
+            const { error: retryError } = await supabase
+              .from('issues')
+              .update({ status: newStatus })
+              .eq('id', id);
+            if (retryError) {
+              console.error("Failed to update status in Supabase after retry:", retryError.message);
+            }
+          } else {
+            console.error("Failed to update status in Supabase:", error.message);
+          }
         }
       } catch (err) {
         console.error("Exception updating issue status:", err);
@@ -113,21 +126,42 @@ export default function AdminConsole({
 
     if (isSupabaseConfigured) {
       try {
+        // 1. Try safe, recursion-proof database RPC delete first
+        const { error: rpcError } = await supabase.rpc('delete_user_by_admin', { target_user_id: userId });
+        
+        if (!rpcError) {
+          // Instant State Sync on success
+          setUsers(prevUsers => prevUsers.filter(u => u.id !== userId));
+          if (setMockUserDatabase) {
+            setMockUserDatabase(prev => prev.filter(u => u.id !== userId));
+          }
+          showNotification(`User account ${userId} successfully removed from central directory (via RPC)`, 'success');
+          return;
+        }
+
+        console.warn("RPC delete failed or function not found, falling back to direct profiles table deletion:", rpcError.message);
+
+        // 2. Fallback to direct profiles table deletion
         const { error } = await supabase
           .from('profiles')
           .delete()
           .eq('id', userId);
         if (error) {
           console.error("Failed to delete user profile from Supabase:", error.message);
+          showNotification(`Failed to delete profile: ${error.message}. Make sure to copy & execute the latest SQL trigger scripts in your Supabase SQL Editor to make the trigger recursion-proof.`, 'warning');
+          return;
         } else {
           // Instant State Sync on success
           setUsers(prevUsers => prevUsers.filter(u => u.id !== userId));
           if (setMockUserDatabase) {
             setMockUserDatabase(prev => prev.filter(u => u.id !== userId));
           }
+          showNotification(`User account ${userId} successfully removed from central directory`, 'success');
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("Exception deleting user profile:", err);
+        showNotification(`Failed to delete profile: ${err.message || err}`, 'warning');
+        return;
       }
     } else {
       // Offline fallback
@@ -135,9 +169,8 @@ export default function AdminConsole({
       if (setMockUserDatabase) {
         setMockUserDatabase(prev => prev.filter(u => u.id !== userId));
       }
+      showNotification(`User account ${userId} successfully removed from local directory (Offline Fallback)`, 'warning');
     }
-
-    showNotification(`User account ${userId} successfully removed from central directory`, 'warning');
   };
 
   const deleteUser = handleDeleteUser;

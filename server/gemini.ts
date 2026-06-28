@@ -25,6 +25,54 @@ function getAiClient(): GoogleGenAI {
 }
 
 /**
+ * Helper to call a Gemini API function with retries for temporary rate limits or unavailability.
+ */
+async function callGeminiWithRetry<T>(
+  apiCall: () => Promise<T>,
+  retries: number = 3,
+  delayMs: number = 1000
+): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await apiCall();
+    } catch (error: any) {
+      attempt++;
+      
+      const errorMessage = error?.message?.toLowerCase() || '';
+      const errorStatus = error?.status;
+      const errorCode = error?.code || (error?.error?.code);
+      
+      const isRateLimit = 
+        errorStatus === 'RESOURCE_EXHAUSTED' || 
+        errorStatus === 429 || 
+        errorCode === 429 ||
+        errorMessage.includes('429') || 
+        errorMessage.includes('quota') || 
+        errorMessage.includes('rate limit') ||
+        errorMessage.includes('exhausted');
+
+      const isUnavailable = 
+        errorStatus === 'UNAVAILABLE' || 
+        errorStatus === 503 || 
+        errorCode === 503 ||
+        errorMessage.includes('503') || 
+        errorMessage.includes('high demand') || 
+        errorMessage.includes('temporary') || 
+        errorMessage.includes('unavailable');
+
+      if ((isRateLimit || isUnavailable) && attempt < retries) {
+        console.warn(`[Gemini API Warning] Attempt ${attempt}/${retries} failed with ${isRateLimit ? 'Rate Limit (429)' : 'Service Unavailable (503)'}. Retrying in ${delayMs}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        delayMs *= 2.5; // Exponential backoff with standard growth
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+/**
  * Interface representing the multimodal Gemini Visual Audit output.
  */
 export interface VisualAuditResult {
@@ -103,7 +151,7 @@ Perform the following tasks:
 Return a strict JSON object following the response schema.`
     };
 
-    const response = await client.models.generateContent({
+    const response = await callGeminiWithRetry(() => client.models.generateContent({
       model: "gemini-3.5-flash",
       contents: [imagePart, textPart],
       config: {
@@ -136,7 +184,7 @@ Return a strict JSON object following the response schema.`
           required: ["isValid", "category", "riskScore", "repairInstructions", "reason"]
         }
       }
-    });
+    }));
 
     const text = response.text?.trim() || "";
     const parsed = JSON.parse(text) as VisualAuditResult;
@@ -149,7 +197,14 @@ Return a strict JSON object following the response schema.`
     };
 
   } catch (error: any) {
-    console.error("Error performing multimodal Gemini Visual Audit:", error);
+    const errorMessage = error?.message || '';
+    const isTemporary = errorMessage.includes('429') || errorMessage.includes('503') || errorMessage.includes('quota') || errorMessage.includes('demand') || errorMessage.includes('UNAVAILABLE') || errorMessage.includes('RESOURCE_EXHAUSTED');
+    
+    if (isTemporary) {
+      console.warn(`[Gemini Visual Audit Warning] Gemini API is currently unavailable or quota exceeded. Smoothly falling back to robust Local Heuristic validation.`);
+    } else {
+      console.error("Error performing multimodal Gemini Visual Audit:", error);
+    }
     
     // Fail-safe fallback logic based on the text description
     const descLower = description.toLowerCase().trim();
@@ -230,7 +285,7 @@ export async function analyzeInfrastructureIssue(
     - categorySuggestion: The most appropriate category (e.g., "Potholes", "Water Leakage", "Waste Management", "Damaged Streetlights", "General Road Hazard").
     - reasoning: Briefly explain your rating in one sentence.`;
 
-    const response = await client.models.generateContent({
+    const response = await callGeminiWithRetry(() => client.models.generateContent({
       model: "gemini-3.5-flash",
       contents: prompt,
       config: {
@@ -274,7 +329,7 @@ export async function analyzeInfrastructureIssue(
           ]
         }
       }
-    });
+    }));
 
     const responseText = response.text?.trim() || "";
     const parsed = JSON.parse(responseText) as IssueAnalysisResult;
@@ -290,8 +345,15 @@ export async function analyzeInfrastructureIssue(
       categorySuggestion: parsed.categorySuggestion || category,
       reasoning: parsed.reasoning || 'Heuristic calculation completed.'
     };
-  } catch (error) {
-    console.error("Error analyzing issue using Gemini SDK in analyzeInfrastructureIssue:", error);
+  } catch (error: any) {
+    const errorMessage = error?.message || '';
+    const isTemporary = errorMessage.includes('429') || errorMessage.includes('503') || errorMessage.includes('quota') || errorMessage.includes('demand') || errorMessage.includes('UNAVAILABLE') || errorMessage.includes('RESOURCE_EXHAUSTED');
+    
+    if (isTemporary) {
+      console.warn(`[Gemini Analysis Warning] Gemini API is currently unavailable or quota exceeded. Smoothly falling back to robust Local Heuristic rating.`);
+    } else {
+      console.error("Error analyzing issue using Gemini SDK in analyzeInfrastructureIssue:", error);
+    }
     // Return a safe, robust fallback object
     return {
       severity: category === 'Potholes' ? 6 : 4,

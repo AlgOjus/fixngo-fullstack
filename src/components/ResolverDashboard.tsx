@@ -97,7 +97,7 @@ export default function ResolverDashboard({ onIssueDispatched }: ResolverDashboa
     if (!isSupabaseConfigured) return;
 
     const channel = supabase
-      .channel('public:issues')
+      .channel('issues_resolver_channel')
       .on(
         'postgres_changes',
         {

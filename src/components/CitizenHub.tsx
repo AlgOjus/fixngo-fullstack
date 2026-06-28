@@ -4,6 +4,7 @@ import { InfrastructureIssue, UserAccount } from '../types';
 import LocationInputResilient from './LocationInputResilient';
 import OperationalMap from './OperationalMap';
 import MediaCapture from './MediaCapture';
+import Leaderboard from './Leaderboard';
 
 interface CitizenHubProps {
   issues: InfrastructureIssue[];
@@ -53,7 +54,7 @@ export default function CitizenHub({
   currentUser
 }: CitizenHubProps) {
 
-  const [activeTab, setActiveTab] = useState<'status' | 'report'>('status');
+  const [activeTab, setActiveTab] = useState<'status' | 'report' | 'leaderboard'>('status');
 
   const handleGPSLocate = () => {
     const lats = ['28.6139', '28.6252', '28.6015', '28.6384', '28.6190'];
@@ -150,6 +151,12 @@ export default function CitizenHub({
         >
           Submit Personalized Report (+50 Points)
         </button>
+        <button
+          onClick={() => setActiveTab('leaderboard')}
+          className={`pb-3 border-b-2 transition-all cursor-pointer ${activeTab === 'leaderboard' ? 'border-indigo-500 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+        >
+          Leaderboard
+        </button>
       </div>
 
       {activeTab === 'status' ? (
@@ -241,6 +248,8 @@ export default function CitizenHub({
           </div>
 
         </div>
+      ) : activeTab === 'leaderboard' ? (
+        <Leaderboard currentUser={currentUser} />
       ) : (
         <div className="max-w-xl mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-6">
           <div>

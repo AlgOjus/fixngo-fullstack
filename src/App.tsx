@@ -311,19 +311,36 @@ export default function App() {
       if (!uuidRegex.test(userId)) return;
 
       try {
-        const { error } = await supabase
+        // Try direct insert first
+        const { error: insertError } = await supabase
           .from('profiles')
-          .upsert({
+          .insert({
             id: userId,
             full_name: fullName,
             email: email,
             role: role,
             updated_at: new Date().toISOString()
           });
-        if (error) {
-          console.warn("Client-side profile sync notice:", error.message);
+
+        if (insertError) {
+          console.warn("syncUserProfile insert failed, falling back to update:", insertError.message);
+          const { error: updateError } = await supabase
+            .from('profiles')
+            .update({
+              full_name: fullName,
+              email: email,
+              role: role,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', userId);
+
+          if (updateError) {
+            console.warn("syncUserProfile fallback update failed:", updateError.message);
+          } else {
+            console.log("syncUserProfile sync completed via update fallback!");
+          }
         } else {
-          console.log("Profile successfully synced to database profiles table!");
+          console.log("syncUserProfile sync completed via direct insert!");
         }
       } catch (err) {
         console.warn("Error running auto-sync profile fallback:", err);
@@ -418,7 +435,7 @@ export default function App() {
           // Switch tab only if we are still on public views
           setActiveTab(prev => {
             if (prev === 'landing' || prev === 'login') {
-              return role as 'citizen' | 'resolver' | 'admin';
+              return checkedRole;
             }
             return prev;
           });
@@ -514,7 +531,7 @@ export default function App() {
 
     // Subscribe to real-time events on the issues table
     const issuesChannel = supabase
-      .channel('public:issues')
+      .channel('issues_app_channel')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'issues' },
@@ -619,22 +636,7 @@ export default function App() {
             return result;
           });
 
-          // Check if current user profile was deleted
-          const curr = currentUserRef.current;
-          if (curr) {
-            const isSupabaseUser = curr.id && curr.id.length > 15 && curr.id !== 'user-admin' && curr.id !== 'user-citizen' && curr.id !== 'user-resolver';
-            if (isSupabaseUser) {
-              const stillExists = mapped.some(m => m.id === curr.id);
-              if (!stillExists) {
-                console.warn("Logged in user profile was deleted from Supabase. Revoking session.");
-                setCurrentUser(null);
-                safeRemoveItem('fix_n_go_current_user');
-                setActiveTab('landing');
-                showNotification('Your profile has been removed from the central grid registry.', 'warning');
-                supabase.auth.signOut().catch(e => console.warn(e));
-              }
-            }
-          }
+          // Profile existence check is safely managed via real-time DELETE event subscription
         }
       } catch (err) {
         console.warn("Error loading profiles from database:", err);
@@ -648,7 +650,7 @@ export default function App() {
 
     // Subscribe to real-time events on the profiles table
     const profilesChannel = supabase
-      .channel('public:profiles')
+      .channel('profiles_app_channel')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'profiles' },

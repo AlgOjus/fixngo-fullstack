@@ -27,5 +27,6 @@ export interface UserAccount {
   password?: string; // used for mock auth representation
   role: 'citizen' | 'resolver' | 'admin';
   createdAt?: string;
+  points?: number;
 }
 

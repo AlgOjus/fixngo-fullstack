@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User, Wrench, ArrowRight, ShieldAlert, Mail, Lock, UserPlus, LogIn, KeyRound, Loader2, CheckCircle2 } from 'lucide-react';
+import { User, Wrench, ArrowRight, ShieldAlert, Mail, Lock, UserPlus, LogIn, KeyRound, Loader2, CheckCircle2, Database, Copy, Check } from 'lucide-react';
 import { UserAccount } from '../types';
 import { supabase } from '../lib/supabase';
 
@@ -40,6 +40,108 @@ export default function UnifiedLogin({
   const [forgotError, setForgotError] = useState('');
 
   const [error, setError] = useState('');
+  const [showAlreadyRegisteredHelp, setShowAlreadyRegisteredHelp] = useState(false);
+  const [registeredHelpEmail, setRegisteredHelpEmail] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [sqlOpen, setSqlOpen] = useState(false);
+
+  const sqlCode = `-- 1. Create public profiles table (if it doesn't exist)
+create table if not exists public.profiles (
+  id uuid references auth.users on delete cascade primary key,
+  full_name text,
+  email text,
+  role text default 'citizen',
+  points integer default 0,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 2. Enable Row Level Security (RLS) on public.profiles
+alter table public.profiles enable row level security;
+
+-- 3. Create RLS Policies to allow standard and Admin operations
+drop policy if exists "Allow public read access to profiles" on public.profiles;
+create policy "Allow public read access to profiles" 
+  on public.profiles for select 
+  using (true);
+
+drop policy if exists "Allow users to insert their own profile" on public.profiles;
+create policy "Allow users to insert their own profile" 
+  on public.profiles for insert 
+  with check (true);
+
+drop policy if exists "Allow users to update their own profile" on public.profiles;
+create policy "Allow users to update their own profile" 
+  on public.profiles for update 
+  using (true);
+
+drop policy if exists "Allow users to delete their own profile" on public.profiles;
+create policy "Allow users to delete their own profile" 
+  on public.profiles for delete 
+  using (true);
+
+-- 4. Create or replace the automatic signup trigger function
+create or replace function public.handle_new_user()
+returns trigger as $$
+begin
+  insert into public.profiles (id, full_name, email, role, points, created_at, updated_at)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'full_name', 'User'),
+    new.email,
+    coalesce(new.raw_user_meta_data->>'role', 'citizen'),
+    0,
+    now(),
+    now()
+  )
+  on conflict (id) do update
+  set
+    full_name = excluded.full_name,
+    role = excluded.role,
+    updated_at = now();
+  return new;
+end;
+$$ language plpgsql security definer;
+
+-- 5. Bind trigger to execute after a user signs up
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
+-- 6. Trigger to automatically delete from auth.users when a public.profile is deleted
+create or replace function public.handle_deleted_profile()
+returns trigger as $$
+begin
+  -- Prevent trigger recursion when cascading from auth.users delete
+  if pg_trigger_depth() > 1 then
+    return old;
+  end if;
+
+  delete from auth.users where id = old.id;
+  return old;
+end;
+$$ language plpgsql security definer;
+
+drop trigger if exists on_profile_deleted on public.profiles;
+create trigger on_profile_deleted
+  after delete on public.profiles
+  for each row execute procedure public.handle_deleted_profile();
+
+-- 7. Optional security-definer RPC function to delete users directly from client-side admin console
+create or replace function public.delete_user_by_admin(target_user_id uuid)
+returns void as $$
+begin
+  delete from auth.users where id = target_user_id;
+end;
+$$ language plpgsql security definer;`;
+
+  const handleCopySql = () => {
+    navigator.clipboard.writeText(sqlCode);
+    setCopied(true);
+    showNotification('Database SQL trigger script copied to clipboard!', 'success');
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   // -------------------------------------------------------------
   // HANDLERS
@@ -128,23 +230,54 @@ export default function UnifiedLogin({
       if (user) {
         const rawRole = user.user_metadata?.role || 'citizen';
         const role = String(rawRole).toLowerCase();
+        const checkedRole = (role === 'admin' || role === 'resolver' || role === 'citizen') ? role : 'citizen';
         const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
+
+        // Direct self-healing profiles sync upon login
+        try {
+          const { error: insertError } = await supabase
+            .from('profiles')
+            .insert({
+              id: user.id,
+              full_name: fullName,
+              email: user.email || '',
+              role: checkedRole,
+              updated_at: new Date().toISOString()
+            });
+
+          if (insertError) {
+            console.warn("Direct login sync insert failed, attempting update fallback:", insertError.message);
+            await supabase
+              .from('profiles')
+              .update({
+                full_name: fullName,
+                email: user.email || '',
+                role: checkedRole,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', user.id);
+          } else {
+            console.log("Direct login sync profile inserted successfully!");
+          }
+        } catch (dbErr) {
+          console.warn("Error running direct client-side profile sync during login:", dbErr);
+        }
 
         const loggedInUser: UserAccount = {
           id: user.id,
           fullName: fullName,
           email: user.email || '',
           password: '',
-          role: (role === 'admin' || role === 'resolver' || role === 'citizen') ? role : 'citizen',
+          role: checkedRole,
           createdAt: user.created_at
         };
 
         setCurrentUser(loggedInUser);
         showNotification(`Welcome back, ${fullName}! Session synchronized with Supabase.`, 'success');
 
-        if (role === 'admin') {
+        if (checkedRole === 'admin') {
           handleTabChange('admin');
-        } else if (role === 'resolver') {
+        } else if (checkedRole === 'resolver') {
           handleTabChange('resolver');
         } else {
           handleTabChange('citizen');
@@ -154,9 +287,20 @@ export default function UnifiedLogin({
       console.warn("Supabase auth error, checking mock fallback:", err.message);
       
       // Find user by email in local database first
-      const emailUser = mockUserDatabase.find(
+      let emailUser = mockUserDatabase.find(
         u => u.email.toLowerCase() === trimmedEmail
       );
+
+      if (!emailUser && (trimmedEmail === 'citizen@example.com' || trimmedEmail === 'resolver@example.com')) {
+        // Safe fallback for pre-seeded developer accounts
+        emailUser = {
+          id: trimmedEmail === 'citizen@example.com' ? 'user-citizen' : 'user-resolver',
+          fullName: trimmedEmail === 'citizen@example.com' ? 'Arjun Sharma' : 'Contractor Unit #442',
+          email: trimmedEmail,
+          password: 'password123',
+          role: trimmedEmail === 'citizen@example.com' ? 'citizen' : 'resolver'
+        };
+      }
 
       if (emailUser) {
         // Self-healing check: If user was registered via OAuth or password is not set, initialize/bind the password!
@@ -264,46 +408,71 @@ export default function UnifiedLogin({
       if (signUpError) throw signUpError;
 
       const user = data.user;
+      const session = data.session;
+
       if (user) {
         const newUser: UserAccount = {
           id: user.id,
           fullName: signUpName,
           email: trimmedEmail,
           password: signUpPassword, // Save the registered password for local/offline fallback access!
-          role: signUpRole,
+          role: signUpRole as any,
           createdAt: user.created_at
         };
 
-        // Client-side Direct Insert/Upsert fallback to profiles table
-        try {
-          const { error: dbError } = await supabase
-            .from('profiles')
-            .upsert({
-              id: user.id,
-              full_name: signUpName,
-              email: trimmedEmail,
-              role: signUpRole,
-              updated_at: new Date().toISOString()
-            });
-          
-          if (dbError) {
-            console.warn("Client-side direct profile sync warning:", dbError.message);
-          } else {
-            console.log("Client-side profile synchronization successful!");
+        if (session) {
+          // Client-side Direct Insert/Upsert fallback to profiles table
+          try {
+            // First try to insert a new profile record (fails if already exists)
+            const { error: insertError } = await supabase
+              .from('profiles')
+              .insert({
+                id: user.id,
+                full_name: signUpName,
+                email: trimmedEmail,
+                role: signUpRole,
+                updated_at: new Date().toISOString()
+              });
+            
+            if (insertError) {
+              console.warn("Insert failed, trying update fallback:", insertError.message);
+              const { error: updateError } = await supabase
+                .from('profiles')
+                .update({
+                  full_name: signUpName,
+                  email: trimmedEmail,
+                  role: signUpRole,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('id', user.id);
+              
+              if (updateError) {
+                console.warn("Fallback update also failed:", updateError.message);
+              } else {
+                console.log("Profile updated successfully via update fallback!");
+              }
+            } else {
+              console.log("Profile inserted successfully via direct insert!");
+            }
+          } catch (dbErr: any) {
+            console.warn("Error running direct client-side profile sync:", dbErr);
           }
-        } catch (dbErr: any) {
-          console.warn("Error running direct client-side profile sync:", dbErr);
-        }
 
-        setMockUserDatabase(prev => [...prev, newUser]);
-        setCurrentUser(newUser);
-        
-        showNotification(`Profile created successfully! Synchronized via handle_new_user trigger.`, 'success');
+          setMockUserDatabase(prev => [...prev, newUser]);
+          setCurrentUser(newUser);
+          
+          showNotification(`Profile created successfully! Synchronized via handle_new_user trigger.`, 'success');
 
-        if (signUpRole === 'resolver') {
-          handleTabChange('resolver');
+          if (signUpRole === 'resolver') {
+            handleTabChange('resolver');
+          } else {
+            handleTabChange('citizen');
+          }
         } else {
-          handleTabChange('citizen');
+          // If no session, it means email verification is enabled on Supabase!
+          showNotification('Registration initiated! Please verify your email or run the Supabase DB Trigger to log in.', 'success');
+          setError('Email verification required! Please check your inbox or disable "Confirm email" in Supabase Auth settings.');
+          setMode('login'); // Switch to standard login screen
         }
 
         setSignUpName('');
@@ -314,8 +483,21 @@ export default function UnifiedLogin({
       }
     } catch (err: any) {
       console.error("Supabase registration failed:", err);
-      setError(err.message || 'Registration failed.');
-      showNotification('Registration failed.', 'warning');
+      const isAlreadyRegistered = err.message && (
+        err.message.toLowerCase().includes('already registered') || 
+        err.message.toLowerCase().includes('already exists') || 
+        err.message.toLowerCase().includes('user_already_exists')
+      );
+
+      if (isAlreadyRegistered) {
+        setError('This email is already registered in your Supabase Auth user database (auth.users), but a profile row was never created in public.profiles. We have enabled self-healing!');
+        setShowAlreadyRegisteredHelp(true);
+        setRegisteredHelpEmail(trimmedEmail);
+        showNotification('Email already registered! Self-healing option unlocked below.', 'warning');
+      } else {
+        setError(err.message || 'Registration failed.');
+        showNotification('Registration failed.', 'warning');
+      }
     }
   };
 
@@ -354,9 +536,13 @@ export default function UnifiedLogin({
         ? `${window.location.origin}/update-password`
         : 'https://fixngo-419142040910.asia-southeast1.run.app/update-password';
 
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+      // Directly proceed to reset password
+      console.log("Attempting password reset for:", email);
+      const { data, error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: finalRedirectUrl,
       });
+
+      console.log("Password reset response:", { data, resetError });
 
       if (resetError) {
         throw resetError;
@@ -731,6 +917,68 @@ export default function UnifiedLogin({
                   <span>Register & Initialize</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
+
+                {showAlreadyRegisteredHelp && (
+                  <div className="mt-4 p-4.5 bg-amber-950/20 border border-amber-500/30 rounded-xl space-y-3.5 text-xs text-amber-200/90 leading-relaxed animate-fade-in">
+                    <div className="flex gap-2 items-start">
+                      <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="text-amber-300 font-bold block mb-1">Why is this happening?</strong>
+                        The email <code className="text-amber-300 font-mono bg-amber-950/60 px-1 py-0.5 rounded text-[11px]">{registeredHelpEmail}</code> has already been registered in your Supabase Authentication database, but has no matching row in the public profiles table.
+                      </div>
+                    </div>
+
+                    <div className="border-t border-amber-500/10 pt-3 space-y-2">
+                      <div className="space-y-1.5">
+                        <span className="block font-semibold text-[11px] text-amber-300 uppercase tracking-wider font-mono">
+                          ⚡ Option A: Self-Heal via Direct Login (Recommended)
+                        </span>
+                        <p className="text-[11px]">
+                          You can log in directly with this account! Our system will automatically detect the missing profile and **instantly create it** on successful login.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLoginEmail(registeredHelpEmail);
+                            setLoginPassword('');
+                            setMode('login');
+                            setError('');
+                            setShowAlreadyRegisteredHelp(false);
+                            showNotification('Switched to Login. Fill in your password to heal your profile!', 'info');
+                          }}
+                          className="w-full mt-1.5 py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 rounded-lg text-xs font-bold transition-all cursor-pointer text-center"
+                        >
+                          Switch to Login & Autofill Email
+                        </button>
+                      </div>
+
+                      <div className="border-t border-amber-500/10 pt-3 space-y-1.5">
+                        <span className="block font-semibold text-[11px] text-amber-300 uppercase tracking-wider font-mono">
+                          🛠️ Option B: Wipe User in Supabase & Start Over
+                        </span>
+                        <p className="text-[11px] text-slate-400">
+                          If you want to clear this account to test a clean registration:
+                        </p>
+                        <ol className="list-decimal list-inside text-[11px] text-slate-400 space-y-1">
+                          <li>Go to your <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer" className="text-orange-400 hover:underline font-semibold">Supabase Console</a>.</li>
+                          <li>Navigate to <span className="text-slate-200 font-medium">Authentication</span> &rarr; <span className="text-slate-200 font-medium">Users</span>.</li>
+                          <li>Search for <span className="text-slate-200 font-mono text-[10px] bg-slate-950 px-1 py-0.5 rounded">{registeredHelpEmail}</span>.</li>
+                          <li>Click the three dots and select <span className="text-red-400 font-medium">Delete User</span>.</li>
+                          <li>Try registering again on this screen!</li>
+                        </ol>
+                      </div>
+
+                      <div className="border-t border-amber-500/10 pt-3 space-y-1">
+                        <span className="block font-semibold text-[11px] text-amber-300 uppercase tracking-wider font-mono">
+                          📧 Option C: Disable Email Verifications
+                        </span>
+                        <p className="text-[11px] text-slate-400">
+                          To skip verify-email screen blocks, go to <span className="text-slate-200 font-medium">Auth Settings</span> &rarr; <span className="text-slate-200 font-medium">Providers</span> &rarr; <span className="text-slate-200 font-medium">Email</span> and turn off <span className="text-slate-200 font-semibold">"Confirm email"</span>. This logs in new users immediately!
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </form>
             )}
           </>
@@ -739,6 +987,9 @@ export default function UnifiedLogin({
 
 
       </div>
+
+
+
     </div>
   );
 }

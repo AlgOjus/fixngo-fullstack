@@ -148,7 +148,7 @@ export const GuidedSimulator: React.FC<GuidedSimulatorProps> = ({
           const { error } = await supabase
             .from('issues')
             .update({
-              status: 'CLAIMED',
+              status: 'In Progress',
               worker_id: currentUser?.id || 'user-resolver',
               updated_at: new Date().toISOString()
             })
@@ -207,7 +207,7 @@ export const GuidedSimulator: React.FC<GuidedSimulatorProps> = ({
           const { error } = await supabase
             .from('issues')
             .update({
-              status: 'RESOLVED',
+              status: 'Resolved',
               after_image_url: mockAfterImg,
               worker_notes: workerNotes,
               updated_at: new Date().toISOString()
@@ -215,7 +215,24 @@ export const GuidedSimulator: React.FC<GuidedSimulatorProps> = ({
             .eq('id', latestId);
 
           if (error) {
-            throw error;
+            const errorMsg = error.message?.toLowerCase() || '';
+            const isMissingColumn = errorMsg.includes('worker_notes') || errorMsg.includes('schema cache');
+            if (isMissingColumn) {
+              console.warn("worker_notes column missing or cached incorrectly. Retrying update without worker_notes...");
+              const { error: retryError } = await supabase
+                .from('issues')
+                .update({
+                  status: 'Resolved',
+                  after_image_url: mockAfterImg,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('id', latestId);
+              if (retryError) {
+                throw retryError;
+              }
+            } else {
+              throw error;
+            }
           }
         }
 
@@ -265,11 +282,19 @@ export const GuidedSimulator: React.FC<GuidedSimulatorProps> = ({
   // 2. Seamless Identity Role Switch
   const handleSwitchRole = async (role: 'citizen' | 'resolver') => {
     const targetEmail = role === 'citizen' ? 'citizen@example.com' : 'resolver@example.com';
-    const mockUser = mockUserDatabase.find(u => u.email.toLowerCase() === targetEmail);
+    let mockUser = mockUserDatabase.find(u => u.email.toLowerCase() === targetEmail);
 
     if (!mockUser) {
-      showNotification(`Mock user for ${role} not found`, 'warning');
-      return;
+      // Fallback dynamic mock user so the demo/simulation NEVER fails
+      mockUser = {
+        id: role === 'citizen' ? 'user-citizen' : 'user-resolver',
+        fullName: role === 'citizen' ? 'Arjun Sharma' : 'Contractor Unit #442',
+        email: targetEmail,
+        password: 'password123',
+        role: role,
+        createdAt: new Date().toISOString()
+      };
+      console.warn(`[Simulator Warning] Mock user for ${role} was not found in database registry. Using highly resilient offline mock profile.`);
     }
 
     showNotification(`Switching identity to ${mockUser.fullName}...`, 'info');
