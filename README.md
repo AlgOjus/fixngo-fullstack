@@ -39,9 +39,9 @@ VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 npm run dev
 ```
 
- Live Pitch Demo Presets (1-Click Simulators)
-During your presentation, use the Guided Simulator Controller in the dashboard to showcase the end-to-end municipal pipeline seamlessly, bypassing manual UI forms:
-[REPORT]: Dispatches a simulated high-quality roadwork report on MG Road, calling the AI pipeline and placing a hazard pin on the map.
-[CLAIM]: Locates the latest reported issue in the database and assigns it instantly to the logged-in municipal resolver (status shifts to CLAIMED / In Progress).
-[VERIFY]: Simulates asphalt cold-mix repair notes, uploads an after-repair verification photo, triggers Gemini AI QA inspection, and closes the ticket as RESOLVED.
-[Reset & Cleanup]: Reverts the database state back to a clean slate, deleting all simulated mock tickets instantly.
+### Live Pitch Demo Presets (1-Click Simulators)
+* **During your presentation, use the Guided Simulator Controller in the dashboard to showcase the end-to-end municipal pipeline seamlessly, bypassing manual UI forms:**
+* **[REPORT]: Dispatches a simulated high-quality roadwork report on MG Road, calling the AI pipeline and placing a hazard pin on the map.**
+* **[CLAIM]: Locates the latest reported issue in the database and assigns it instantly to the logged-in municipal resolver (status shifts to CLAIMED / In Progress).**
+* **[VERIFY]: Simulates asphalt cold-mix repair notes, uploads an after-repair verification photo, triggers Gemini AI QA inspection, and closes the ticket as RESOLVED.**
+* **[Reset & Cleanup]: Reverts the database state back to a clean slate, deleting all simulated mock tickets instantly.**
