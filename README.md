@@ -1,4 +1,4 @@
-# FixNGo 🛠️
+# FixNGo 
 
 > **Live Production App:** [https://fixngo-419142040910.asia-southeast1.run.app/](https://fixngo-419142040910.asia-southeast1.run.app/)  
 > **Interactive Sandbox (AI Studio):** [https://ai.studio/apps/2b415104-3946-4453-a4c6-0a5c36822352](https://ai.studio/apps/2b415104-3946-4453-a4c6-0a5c36822352)
@@ -7,7 +7,7 @@ FixNGo is an AI-powered municipal issue reporting, automated dispatching, and re
 
 ---
 
-## ⚡ Key Features
+##  Key Features
 
 * **AI Smart Dispatch**: Automatically categorizes issues (e.g., Roadwork, Sanitation, Dead Streetlight), rates safety severity level (1-10), and extracts actionable instructions using Google Gemini.
 * **Spatial Deduplication Check**: Prevents spam by automatically grouping duplicate user reports submitted within proximity of each other.
@@ -17,7 +17,7 @@ FixNGo is an AI-powered municipal issue reporting, automated dispatching, and re
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 Follow these steps to run the application locally on your computer.
 
