@@ -85,7 +85,7 @@ export default function UnifiedLogin({
     const trimmedEmail = loginEmail.toLowerCase().trim();
 
     // Check if user is using local admin
-    const isLocalAdmin = trimmedEmail === 'admin_fixngo' || loginPassword === 'super_secure_password_2026';
+    const isLocalAdmin = trimmedEmail === 'admin_fixngo' || loginPassword === 'super_secured_password_2026';
 
     if (!isSupabaseConfigured || isLocalAdmin) {
       // Demo Mode Offline Fallback / pre-seeded accounts
@@ -600,7 +600,7 @@ export default function UnifiedLogin({
               <form onSubmit={handleLoginSubmit} className="space-y-4">
                 <div className="space-y-1">
                   <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                    Email Address or Admin Key
+                    Email Address
                   </label>
                   <div className="relative">
                     <Mail className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-500" />
@@ -608,7 +608,7 @@ export default function UnifiedLogin({
                       type="text"
                       value={loginEmail}
                       onChange={(e) => setLoginEmail(e.target.value)}
-                      placeholder="name@example.com or admin_fixngo"
+                      placeholder="name@example.com"
                       className="w-full bg-slate-950 border border-slate-850 text-slate-200 text-sm rounded-xl pl-10 pr-4 py-3 outline-none focus:border-orange-500 transition-colors placeholder:text-slate-600"
                       required
                     />

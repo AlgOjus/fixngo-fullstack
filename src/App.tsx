@@ -5,6 +5,7 @@ import { supabase } from './lib/supabase';
 
 // Import sub-components
 import GuestPortal from './components/GuestPortal';
+import { GuidedSimulator } from './components/GuidedSimulator';
 import UnifiedLogin from './components/UnifiedLogin';
 import CitizenHub from './components/CitizenHub';
 import ResolversPortal from './components/ResolversPortal';
@@ -118,36 +119,61 @@ export default function App() {
   // Mock User Database for transition to PostgreSQL/Supabase Auth
   const [mockUserDatabase, setMockUserDatabase] = useState<UserAccount[]>(() => {
     const saved = safeGetItem('fix_n_go_users');
+    let db: UserAccount[] = [];
     if (saved) {
       try {
-        return JSON.parse(saved);
+        db = JSON.parse(saved);
       } catch (e) {
         console.error("Failed to parse user database", e);
       }
     }
-    return [
-      {
+    
+    if (!Array.isArray(db) || db.length === 0) {
+      db = [
+        {
+          id: 'user-admin',
+          fullName: 'System Administrator',
+          email: 'admin_fixngo',
+          password: 'super_secured_password_2026',
+          role: 'admin'
+        },
+        {
+          id: 'user-citizen',
+          fullName: 'Arjun Sharma',
+          email: 'citizen@example.com',
+          password: 'password123',
+          role: 'citizen'
+        },
+        {
+          id: 'user-resolver',
+          fullName: 'Contractor Unit #442',
+          email: 'resolver@example.com',
+          password: 'password123',
+          role: 'resolver'
+        }
+      ];
+    }
+
+    // Force system administrator credentials to ensure they are never stale
+    const adminIdx = db.findIndex(u => u.id === 'user-admin');
+    if (adminIdx !== -1) {
+      db[adminIdx] = {
+        ...db[adminIdx],
+        email: 'admin_fixngo',
+        password: 'super_secured_password_2026',
+        role: 'admin'
+      };
+    } else {
+      db.unshift({
         id: 'user-admin',
         fullName: 'System Administrator',
         email: 'admin_fixngo',
-        password: 'super_secure_password_2026',
+        password: 'super_secured_password_2026',
         role: 'admin'
-      },
-      {
-        id: 'user-citizen',
-        fullName: 'Arjun Sharma',
-        email: 'citizen@example.com',
-        password: 'password123',
-        role: 'citizen'
-      },
-      {
-        id: 'user-resolver',
-        fullName: 'Contractor Unit #442',
-        email: 'resolver@example.com',
-        password: 'password123',
-        role: 'resolver'
-      }
-    ];
+      });
+    }
+
+    return db;
   });
 
   // Current Logged-In User active session
@@ -185,6 +211,16 @@ export default function App() {
   useEffect(() => {
     const syncPoints = async () => {
       if (currentUser && currentUser.id) {
+        // Hard Guard against admin or non-UUID updates
+        if (currentUser.id === 'user-admin') {
+          return;
+        }
+
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!uuidRegex.test(currentUser.id)) {
+          return;
+        }
+
         const isSupabaseConfigured = 
           import.meta.env.VITE_SUPABASE_URL && 
           import.meta.env.VITE_SUPABASE_URL !== 'https://your-project-id.supabase.co' &&
@@ -270,6 +306,10 @@ export default function App() {
 
     // Helper function to sync profile client-side as a fail-safe fallback
     const syncUserProfile = async (userId: string, email: string, fullName: string, role: string) => {
+      if (userId === 'user-admin') return;
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(userId)) return;
+
       try {
         const { error } = await supabase
           .from('profiles')
@@ -292,6 +332,10 @@ export default function App() {
 
     // Helper to fetch and restore user points from Supabase
     const fetchAndSetUserPoints = async (userId: string) => {
+      if (userId === 'user-admin') return;
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(userId)) return;
+
       try {
         const { data, error } = await supabase
           .from('profiles')
@@ -562,29 +606,17 @@ export default function App() {
           }));
 
           setMockUserDatabase(prev => {
-            const merged = [...prev];
-            mapped.forEach(dbUser => {
-              const idx = merged.findIndex(u => u.id === dbUser.id || u.email === dbUser.email);
-              if (idx !== -1) {
-                merged[idx] = { 
-                  ...merged[idx], 
-                  id: dbUser.id,
-                  fullName: dbUser.fullName,
-                  email: dbUser.email,
-                  role: dbUser.role,
-                  createdAt: dbUser.createdAt
-                };
-              } else {
-                merged.push(dbUser);
-              }
-            });
-            return merged.filter(user => {
-              const isSupabaseId = user.id && user.id.length > 15 && user.id !== 'user-admin' && user.id !== 'user-citizen' && user.id !== 'user-resolver';
-              if (isSupabaseId) {
-                return mapped.some(m => m.id === user.id);
-              }
-              return true;
-            });
+            const result = [...mapped];
+            const localAdmin: UserAccount = {
+              id: 'user-admin',
+              fullName: 'Municipal Chief (Admin)',
+              email: 'admin_fixngo',
+              password: 'super_secured_password_2026',
+              role: 'admin',
+              createdAt: prev.find(u => u.id === 'user-admin')?.createdAt || new Date().toISOString()
+            };
+            result.unshift(localAdmin);
+            return result;
           });
 
           // Check if current user profile was deleted
@@ -835,11 +867,23 @@ export default function App() {
   };
 
   // Report Issue submission pipeline integrating Server-Side Gemini AI & Spatial Deduplication Check
-  const handleReportIssue = async (isGuest = false) => {
+  const handleReportIssue = async (
+    isGuest = false,
+    overrides?: {
+      category?: string;
+      lat?: string;
+      lng?: string;
+      description?: string;
+      imageUrl?: string;
+    }
+  ) => {
     setIsAnalyzing(true);
 
-    let lat = parseFloat(newIssueLat);
-    let lng = parseFloat(newIssueLng);
+    const activeCategory = overrides?.category || newIssueCategory;
+    const activeDescription = overrides?.description || newIssueDescription;
+
+    let lat = parseFloat(overrides?.lat || newIssueLat);
+    let lng = parseFloat(overrides?.lng || newIssueLng);
     const isDefaultCoords = (isNaN(lat) || isNaN(lng) || (lat === 28.6139 && lng === 77.2090));
 
     // Only capture geolocation via navigator if coordinates are default and we need a fallback
@@ -864,11 +908,11 @@ export default function App() {
     if (isNaN(lat)) lat = 28.6139;
     if (isNaN(lng)) lng = 77.2090;
 
-    const description = newIssueDescription.trim() || `Accumulated issue of type ${newIssueCategory} causing local municipal inconvenience. Please resolve at the earliest.`;
+    const description = activeDescription.trim() || `Accumulated issue of type ${activeCategory} causing local municipal inconvenience. Please resolve at the earliest.`;
     
     // MOCK AI SPATIAL DEDUPLICATION: Check if an issue exists within a tiny radius
     const duplicateIndex = issues.findIndex(issue => 
-      Math.abs(issue.lat - lat) < 0.005 && Math.abs(issue.lng - lng) < 0.005 && issue.category === newIssueCategory
+      Math.abs(issue.lat - lat) < 0.005 && Math.abs(issue.lng - lng) < 0.005 && issue.category === activeCategory
     );
 
     if (duplicateIndex !== -1 && issues[duplicateIndex].status !== 'RESOLVED') {
@@ -893,7 +937,7 @@ export default function App() {
       const response = await fetch('/api/analyze-issue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category: newIssueCategory, description })
+        body: JSON.stringify({ category: activeCategory, description })
       });
 
       if (response.ok) {
@@ -908,13 +952,13 @@ export default function App() {
     }
 
     // Determine sample image category matching
-    let finalImg = uploadedImage;
+    let finalImg = overrides?.imageUrl || uploadedImage;
     if (!finalImg) {
-      if (newIssueCategory.toLowerCase().includes('water')) {
+      if (activeCategory.toLowerCase().includes('water')) {
         finalImg = 'https://images.unsplash.com/photo-1585338107529-13afc5f02586?auto=format&fit=crop&q=80&w=600';
-      } else if (newIssueCategory.toLowerCase().includes('waste')) {
+      } else if (activeCategory.toLowerCase().includes('waste')) {
         finalImg = 'https://images.unsplash.com/photo-1611284446314-60a58ac0deb9?auto=format&fit=crop&q=80&w=600';
-      } else if (newIssueCategory.toLowerCase().includes('light')) {
+      } else if (activeCategory.toLowerCase().includes('light')) {
         finalImg = 'https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&q=80&w=600';
       } else {
         finalImg = 'https://images.unsplash.com/photo-1515162305285-0293e4767cc2?auto=format&fit=crop&q=80&w=600';
@@ -929,6 +973,9 @@ export default function App() {
       import.meta.env.VITE_SUPABASE_ANON_KEY &&
       import.meta.env.VITE_SUPABASE_ANON_KEY !== 'your-supabase-anon-key';
 
+    let uploadPath = '';
+
+    // Step 1: Upload the image to the storage bucket first
     if (isSupabaseConfigured && uploadedFile) {
       try {
         const fileExt = uploadedFile.name.split('.').pop() || 'jpg';
@@ -947,13 +994,14 @@ export default function App() {
 
         if (upData1) {
           uploadData = upData1;
+          uploadPath = upData1.path;
         } else {
           console.error("Storage upload to 'issue-images' failed:", err1?.message);
           showNotification("Storage Upload Failed: Please ensure you have created a public bucket named 'issue-images' in Supabase.", "warning");
         }
 
         if (uploadData) {
-          // 2. Take the path of the uploaded file and call .getPublicUrl(...)
+          // Take the path of the uploaded file and call .getPublicUrl(...)
           const { data: urlData } = supabase.storage
             .from(chosenBucket)
             .getPublicUrl(uploadData.path);
@@ -968,6 +1016,63 @@ export default function App() {
       }
     }
 
+    // Step 2: Call the AI audit endpoint and wait for the JSON response
+    showNotification('Performing Gemini Multimodal Visual Audit...', 'info');
+    let isAuditValid = true;
+    let auditReason = '';
+
+    try {
+      const auditRes = await fetch('/api/audit-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageUrl: finalImg, description: description })
+      });
+
+      if (!auditRes.ok) {
+        throw new Error('Visual audit API endpoint returned an error.');
+      }
+
+      const auditData = await auditRes.json();
+      console.log("[Visual Audit Result]", auditData);
+
+      isAuditValid = auditData.isValid;
+      auditReason = auditData.reason || 'Image is unrelated or invalid.';
+
+      if (isAuditValid) {
+        // Overwrite severity/priority and advice if valid
+        if (auditData.riskScore) {
+          parsedSeverity = auditData.riskScore;
+        }
+        if (auditData.repairInstructions) {
+          advice = `[Visual Audit Action Plan] ${auditData.repairInstructions}. ${advice}`;
+        }
+        showNotification('Gemini Visual Audit verified successfully!', 'success');
+      }
+    } catch (auditErr: any) {
+      console.warn("Visual Audit connection failed, using local/fallback validation:", auditErr);
+      isAuditValid = true; // Fallback in case of server offline to keep sandbox usable
+    }
+
+    // Step 3: Check the isValid property from the audit response (The Gate)
+    if (!isAuditValid) {
+      // If false: Stop execution immediately, show an alert with the reason, and delete the uploaded image from the bucket
+      alert(`AI Visual Audit Rejected:\n\nReason: ${auditReason || 'The uploaded image was flagged as SPAM, selfie, or unrelated to civic infrastructure.'}`);
+      showNotification(`Visual Audit Flagged Spam: ${auditReason || 'Image is unrelated or invalid.'}`, 'warning');
+
+      if (isSupabaseConfigured && uploadPath) {
+        try {
+          await supabase.storage.from('issue-images').remove([uploadPath]);
+          console.log("Successfully cleaned up invalid uploaded image from storage:", uploadPath);
+        } catch (delErr) {
+          console.warn("Failed to delete invalid uploaded image:", delErr);
+        }
+      }
+
+      setIsAnalyzing(false);
+      return null; // Stop execution immediately and return null
+    }
+
+    // Proceed to insert the issue into the issues table only if audit is valid
     const newId = generateUUID();
     // Register ID as personal in local registry
     try {
@@ -981,7 +1086,7 @@ export default function App() {
     // Create new ticket
     const newIssue: InfrastructureIssue = {
       id: newId,
-      category: newIssueCategory,
+      category: activeCategory,
       lat: lat,
       lng: lng,
       severity: parseFloat(parsedSeverity.toFixed(1)),
@@ -1017,7 +1122,7 @@ export default function App() {
           return isNaN(parsed) ? 100 : parsed;
         };
 
-        // 3. Finally, insert the new row into the 'issues' table, matching the exact schema columns
+        // Nested inside the if (isAuditValid) path of the function
         const { error: dbError } = await supabase
           .from('issues')
           .insert({
@@ -1034,7 +1139,7 @@ export default function App() {
             updated_at: new Date().toISOString(),
             ai_advice: newIssue.aiAdvice,
             category: newIssue.category,
-            custom_category_note: newIssueCategory === 'Other' ? customCategoryNote : null,
+            custom_category_note: activeCategory === 'Other' ? customCategoryNote : null,
             severity: newIssue.severity,
             distance: parseDistanceToNumber(newIssue.distance),
             image_url: finalImg
@@ -1066,6 +1171,7 @@ export default function App() {
 
     // Navigate to landing automatically
     handleTabChange('landing');
+    return newIssue;
   };
 
   const handleAcceptTask = (id: string) => {
@@ -1391,6 +1497,21 @@ export default function App() {
       <footer className="w-full bg-slate-950 border-t border-slate-900 py-6 mt-12 text-center text-xs text-slate-500 space-y-2">
         <p>© {new Date().getFullYear()} FixNGo. Action-Driven Civic Infrastructure Dispatch. All rights reserved.</p>
       </footer>
+
+      {/* Guided Simulator floating widget */}
+      <GuidedSimulator
+        currentUser={currentUser}
+        setCurrentUser={setCurrentUser}
+        issues={issues}
+        setIssues={setIssues}
+        userPoints={userPoints}
+        setUserPoints={setUserPoints}
+        activeTab={activeTab}
+        handleTabChange={handleTabChange}
+        showNotification={showNotification}
+        mockUserDatabase={mockUserDatabase}
+        handleReportIssue={handleReportIssue}
+      />
 
     </div>
   );

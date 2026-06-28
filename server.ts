@@ -3,7 +3,7 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
-import { analyzeInfrastructureIssue } from "./server/gemini";
+import { analyzeInfrastructureIssue, auditVisualIssue } from "./server/gemini";
 
 dotenv.config();
 
@@ -144,6 +144,55 @@ app.post("/api/analyze-issue", async (req, res) => {
     } catch {
       return res.status(500).json({ error: "Something went wrong on the server." });
     }
+  }
+});
+
+// API endpoint for Multimodal Gemini Visual Audit
+app.post("/api/visual-audit", async (req, res) => {
+  try {
+    const { imageUrl, description } = req.body;
+
+    if (!imageUrl) {
+      return res.status(400).json({ error: "Image URL or base64 string is required for visual audit." });
+    }
+
+    console.log(`[Gemini Visual Audit] Auditing issue image with description length: ${description?.length || 0}`);
+    
+    // Call our server-side multimodal utility function
+    const auditResult = await auditVisualIssue(imageUrl, description || "");
+    
+    return res.json(auditResult);
+
+  } catch (error: any) {
+    console.error("Gemini Visual Audit endpoint failed:", error);
+    return res.status(500).json({ 
+      error: "Visual audit failed on server.", 
+      details: error.message 
+    });
+  }
+});
+
+app.post("/api/audit-image", async (req, res) => {
+  try {
+    const { imageUrl, description } = req.body;
+
+    if (!imageUrl) {
+      return res.status(400).json({ error: "Image URL or base64 string is required for visual audit." });
+    }
+
+    console.log(`[Gemini Visual Audit] /api/audit-image Auditing issue image with description length: ${description?.length || 0}`);
+    
+    // Call our server-side multimodal utility function
+    const auditResult = await auditVisualIssue(imageUrl, description || "");
+    
+    return res.json(auditResult);
+
+  } catch (error: any) {
+    console.error("Gemini Visual Audit endpoint failed:", error);
+    return res.status(500).json({ 
+      error: "Visual audit failed on server.", 
+      details: error.message 
+    });
   }
 });
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ShieldAlert, Terminal, Eye, EyeOff, AlertTriangle, Database, Trash2, CheckCircle, Users, UserX } from 'lucide-react';
 import { InfrastructureIssue, UserAccount } from '../types';
 import { supabase } from '../lib/supabase';
@@ -33,10 +33,15 @@ export default function AdminConsole({
   const [showPassword, setShowPassword] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(bypassAuth);
   const [error, setError] = useState('');
+  const [users, setUsers] = useState<UserAccount[]>(mockUserDatabase);
+
+  useEffect(() => {
+    setUsers(mockUserDatabase);
+  }, [mockUserDatabase]);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (username === 'admin_fixngo' && password === 'super_secure_password_2026') {
+    if (username === 'admin_fixngo' && password === 'super_secured_password_2026') {
       setIsAuthenticated(true);
       setError('');
       showNotification('High-clearance security session initialized.', 'success');
@@ -91,13 +96,19 @@ export default function AdminConsole({
   };
 
   const handleDeleteUser = async (userId: string) => {
-    if (userId === 'user-admin' || userId === currentUser?.id) {
+    if (userId === 'user-admin') {
+      console.error('Delete blocked');
+      return;
+    }
+
+    if (userId === currentUser?.id) {
       showNotification("Cannot delete active system administrator session.", "warning");
       return;
     }
 
-    if (setMockUserDatabase) {
-      setMockUserDatabase(prev => prev.filter(u => u.id !== userId));
+    const user = users.find(u => u.id === userId);
+    if (user && (user.role === 'admin' || (user.role as string) === 'ADMIN')) {
+      return;
     }
 
     if (isSupabaseConfigured) {
@@ -108,14 +119,28 @@ export default function AdminConsole({
           .eq('id', userId);
         if (error) {
           console.error("Failed to delete user profile from Supabase:", error.message);
+        } else {
+          // Instant State Sync on success
+          setUsers(prevUsers => prevUsers.filter(u => u.id !== userId));
+          if (setMockUserDatabase) {
+            setMockUserDatabase(prev => prev.filter(u => u.id !== userId));
+          }
         }
       } catch (err) {
         console.error("Exception deleting user profile:", err);
+      }
+    } else {
+      // Offline fallback
+      setUsers(prevUsers => prevUsers.filter(u => u.id !== userId));
+      if (setMockUserDatabase) {
+        setMockUserDatabase(prev => prev.filter(u => u.id !== userId));
       }
     }
 
     showNotification(`User account ${userId} successfully removed from central directory`, 'warning');
   };
+
+  const deleteUser = handleDeleteUser;
 
   if (!isAuthenticated) {
     return (
@@ -368,64 +393,72 @@ export default function AdminConsole({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/40 text-slate-300">
-              {mockUserDatabase.map(user => {
-                const isUserActive = currentUser?.id === user.id;
-                return (
-                  <tr key={user.id} className="hover:bg-slate-800/20">
-                    <td className="py-3 font-mono text-slate-400 text-[10px]">{user.id}</td>
-                    <td className="py-3 font-bold text-white">
-                      <div className="flex items-center gap-2">
-                        <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-[9px] border shrink-0 ${
-                          user.role === 'citizen' ? 'bg-indigo-500/10 border-indigo-500/25 text-indigo-400' :
-                          user.role === 'resolver' ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400' :
-                          'bg-rose-500/10 border-rose-500/25 text-rose-400'
-                        }`}>
-                          {user.fullName ? user.fullName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'US'}
+              {users.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-slate-500 italic">
+                    No registered user accounts found in the central directory.
+                  </td>
+                </tr>
+              ) : (
+                users.map(user => {
+                  const isUserActive = currentUser?.id === user.id;
+                  return (
+                    <tr key={user.id} className="hover:bg-slate-800/20">
+                      <td className="py-3 font-mono text-slate-400 text-[10px]">{user.id}</td>
+                      <td className="py-3 font-bold text-white">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-[9px] border shrink-0 ${
+                            user.role === 'citizen' ? 'bg-indigo-500/10 border-indigo-500/25 text-indigo-400' :
+                            user.role === 'resolver' ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400' :
+                            'bg-rose-500/10 border-rose-500/25 text-rose-400'
+                          }`}>
+                            {user.fullName ? user.fullName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'US'}
+                          </div>
+                          <span>{user.fullName}</span>
                         </div>
-                        <span>{user.fullName}</span>
-                      </div>
-                    </td>
-                    <td className="py-3 font-mono text-[11px]">{user.email}</td>
-                    <td className="py-3">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                        user.role === 'admin' ? 'bg-rose-500/15 text-rose-400 border border-rose-500/20' :
-                        user.role === 'resolver' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' :
-                        'bg-indigo-500/15 text-indigo-400 border border-indigo-500/20'
-                      }`}>
-                        {user.role}
-                      </span>
-                    </td>
-                    <td className="py-3">
-                      {isUserActive ? (
-                        <span className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded text-[10px] font-bold">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-                          Logged In
+                      </td>
+                      <td className="py-3 font-mono text-[11px]">{user.email}</td>
+                      <td className="py-3">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                          user.role === 'admin' ? 'bg-rose-500/15 text-rose-400 border border-rose-500/20' :
+                          user.role === 'resolver' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' :
+                          'bg-indigo-500/15 text-indigo-400 border border-indigo-500/20'
+                        }`}>
+                          {user.role}
                         </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 bg-slate-950 text-slate-500 border border-slate-850/60 px-2 py-0.5 rounded text-[10px] font-semibold">
-                          Registered
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 text-slate-400 font-mono">
-                      {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}
-                    </td>
-                    <td className="py-3 text-right">
-                      {user.id !== 'user-admin' && user.id !== currentUser?.id ? (
-                        <button
-                          onClick={() => handleDeleteUser(user.id)}
-                          className="bg-red-500/10 text-red-400 border border-red-500/20 p-1.5 rounded hover:bg-red-500/20 transition cursor-pointer inline-flex items-center justify-center"
-                          title="Delete User Profile"
-                        >
-                          <UserX className="w-3.5 h-3.5" />
-                        </button>
-                      ) : (
-                        <span className="text-[10px] text-slate-600 italic">Protected</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+                      </td>
+                      <td className="py-3">
+                        {isUserActive ? (
+                          <span className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded text-[10px] font-bold">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                            Logged In
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 bg-slate-950 text-slate-500 border border-slate-850/60 px-2 py-0.5 rounded text-[10px] font-semibold">
+                            Registered
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 text-slate-400 font-mono">
+                        {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}
+                      </td>
+                      <td className="py-3 text-right">
+                        {user.id !== 'user-admin' && user.id !== currentUser?.id && user.role !== 'admin' && (user.role as string) !== 'ADMIN' ? (
+                          <button
+                            onClick={() => handleDeleteUser(user.id)}
+                            className="bg-red-500/10 text-red-400 border border-red-500/20 p-1.5 rounded hover:bg-red-500/20 transition cursor-pointer inline-flex items-center justify-center"
+                            title="Delete User Profile"
+                          >
+                            <UserX className="w-3.5 h-3.5" />
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-slate-600 italic">Protected</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
