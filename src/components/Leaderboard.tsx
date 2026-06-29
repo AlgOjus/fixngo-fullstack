@@ -5,13 +5,28 @@ import { Trophy, Award } from 'lucide-react';
 
 interface LeaderboardProps {
   currentUser?: UserAccount | null;
+  allProfiles?: UserAccount[];
 }
 
-export default function Leaderboard({ currentUser }: LeaderboardProps) {
+export default function Leaderboard({ currentUser, allProfiles }: LeaderboardProps) {
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (allProfiles && allProfiles.length > 0) {
+      const list = allProfiles
+        .filter(p => p.role === 'citizen')
+        .map(p => ({
+          ...p,
+          points: p.points || 0
+        }))
+        .sort((a, b) => (b.points || 0) - (a.points || 0));
+      setUsers(list);
+      setLoading(false);
+      // Still fetch from DB to update if needed? Maybe not.
+      return;
+    }
+
     const fetchLeaderboard = async () => {
       setLoading(true);
       try {
@@ -22,7 +37,7 @@ export default function Leaderboard({ currentUser }: LeaderboardProps) {
 
         if (error) throw error;
         
-        const leaderboardUsers = data.map(u => ({
+        const leaderboardUsers = (data || []).map(u => ({
           id: u.id,
           fullName: u.full_name,
           email: u.email,
@@ -37,7 +52,7 @@ export default function Leaderboard({ currentUser }: LeaderboardProps) {
       }
     };
     fetchLeaderboard();
-  }, []);
+  }, [allProfiles]);
 
   const currentUserRank = users.findIndex(u => u.id === currentUser?.id) + 1;
 

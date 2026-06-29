@@ -28,6 +28,7 @@ interface CitizenHubProps {
   setUserPoints: React.Dispatch<React.SetStateAction<number>>;
   showNotification: (msg: string, type?: string) => void;
   currentUser?: UserAccount | null;
+  allProfiles?: UserAccount[];
 }
 
 export default function CitizenHub({
@@ -51,10 +52,33 @@ export default function CitizenHub({
   userPoints,
   setUserPoints,
   showNotification,
-  currentUser
+  currentUser,
+  allProfiles
 }: CitizenHubProps) {
 
   const [activeTab, setActiveTab] = useState<'status' | 'report' | 'leaderboard'>('status');
+
+  // Merge and sort profiles to ensure we always have accurate points and include the current user
+  const leaderboardUsers = (() => {
+    const list = [...(allProfiles || [])].filter(p => p.role === 'citizen');
+    
+    // Ensure current user is in the list with their latest points state
+    if (currentUser && currentUser.role === 'citizen' && !list.some(p => p.id === currentUser.id)) {
+      list.push({
+        ...currentUser,
+        points: userPoints
+      });
+    }
+
+    // Sort by points descending
+    return list.sort((a, b) => {
+      const ptsA = a.id === currentUser?.id ? userPoints : (a.points || 0);
+      const ptsB = b.id === currentUser?.id ? userPoints : (b.points || 0);
+      return ptsB - ptsA;
+    });
+  })();
+
+  const currentUserRank = leaderboardUsers.findIndex(u => u.id === currentUser?.id) + 1;
 
   const handleGPSLocate = () => {
     const lats = ['28.6139', '28.6252', '28.6015', '28.6384', '28.6190'];
@@ -215,21 +239,40 @@ export default function CitizenHub({
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Rewards Leaderboard</h3>
               <p className="text-[11px] text-slate-400 mb-4">Coordinate with active dispatches to claim higher ranks inside Greater Mohalla.</p>
               
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between p-2 bg-slate-950/40 rounded border border-slate-850">
-                  <span className="text-slate-300">
-                    1. {(() => {
-                      if (!currentUser || !currentUser.fullName) return 'Arjun S.';
-                      const name = currentUser.fullName.trim();
-                      const parts = name.split(/\s+/);
-                      if (parts.length > 1) {
-                        return `${parts[0]} ${parts[1][0]}.`;
-                      }
-                      return name;
-                    })()} (You)
-                  </span>
-                  <span className="text-indigo-400 font-bold font-mono">{userPoints} pts</span>
-                </div>
+              <div className="space-y-2 text-xs max-h-[180px] overflow-y-auto scrollbar-thin">
+                {leaderboardUsers.map((user, index) => {
+                  const isSelf = user.id === currentUser?.id;
+                  const displayName = (() => {
+                    const name = user.fullName.trim();
+                    const parts = name.split(/\s+/);
+                    if (parts.length > 1) {
+                      return `${parts[0]} ${parts[1][0]}.`;
+                    }
+                    return name;
+                  })();
+                  const pts = isSelf ? userPoints : (user.points || 0);
+
+                  return (
+                    <div 
+                      key={user.id} 
+                      className={`flex justify-between items-center p-2 rounded border transition-all ${
+                        isSelf 
+                          ? 'bg-indigo-500/10 border-indigo-500/30 font-bold text-white' 
+                          : 'bg-slate-950/40 border-slate-850 text-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-500 w-4">#{index + 1}</span>
+                        <span className="truncate max-w-[120px]">
+                          {displayName} {isSelf && <span className="text-[10px] text-indigo-400 font-semibold">(You)</span>}
+                        </span>
+                      </div>
+                      <span className={`font-mono font-bold ${isSelf ? 'text-indigo-400' : 'text-slate-400'}`}>
+                        {pts} pts
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -249,7 +292,7 @@ export default function CitizenHub({
 
         </div>
       ) : activeTab === 'leaderboard' ? (
-        <Leaderboard currentUser={currentUser} />
+        <Leaderboard currentUser={currentUser} allProfiles={allProfiles} />
       ) : (
         <div className="max-w-xl mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-6">
           <div>

@@ -93,7 +93,32 @@ export default function App() {
   // Client-side router synchronized with the browser address bar
   const getInitialTab = () => {
     try {
-      const path = window.location.pathname;
+      const rawPath = window.location.pathname;
+      const path = rawPath.replace(/\/$/, '') || '/';
+      const urlParams = new URLSearchParams(window.location.search);
+      let hashParams = new URLSearchParams();
+      if (window.location.hash) {
+        const hashStr = window.location.hash.startsWith('#') 
+          ? window.location.hash.slice(1) 
+          : window.location.hash;
+        hashParams = new URLSearchParams(hashStr);
+      }
+
+      const isRecovery = urlParams.get('type') === 'recovery' || 
+                         hashParams.get('type') === 'recovery' || 
+                         window.location.hash.includes('type=recovery') || 
+                         window.location.hash.includes('recovery') ||
+                         path === '/update-password';
+
+      if (isRecovery) {
+        try {
+          window.history.replaceState({}, '', '/update-password' + window.location.hash);
+        } catch (e) {
+          console.warn("Failed to update history path during recovery routing:", e);
+        }
+        return 'update-password';
+      }
+
       if (path === '/admin') return 'admin';
       if (path === '/login') return 'login';
       if (path === '/update-password') return 'update-password';
@@ -414,6 +439,54 @@ export default function App() {
     // Listen to real-time auth state updates (e.g. successful Google redirect or sign out)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        console.log("Supabase Auth Event received:", event, !!session);
+
+        const urlParams = new URLSearchParams(window.location.search);
+        let hashParams = new URLSearchParams();
+        if (window.location.hash) {
+          const hashStr = window.location.hash.startsWith('#') 
+            ? window.location.hash.slice(1) 
+            : window.location.hash;
+          hashParams = new URLSearchParams(hashStr);
+        }
+        
+        const pathNormalized = window.location.pathname.replace(/\/$/, '') || '/';
+        const isRecovery = event === 'PASSWORD_RECOVERY' ||
+                           urlParams.get('type') === 'recovery' || 
+                           hashParams.get('type') === 'recovery' || 
+                           window.location.hash.includes('type=recovery') || 
+                           window.location.hash.includes('recovery') ||
+                           pathNormalized === '/update-password';
+
+        if (isRecovery && session?.user) {
+          console.log("Force update-password tab due to active recovery session.");
+          const user = session.user;
+          const rawRole = user.user_metadata?.role || 'citizen';
+          const role = String(rawRole).toLowerCase();
+          const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
+          const checkedRole = (role === 'admin' || role === 'resolver' || role === 'citizen') ? role : 'citizen';
+
+          const loggedInUser: UserAccount = {
+            id: user.id,
+            fullName: fullName,
+            email: user.email || '',
+            password: '',
+            role: checkedRole,
+            createdAt: user.created_at
+          };
+
+          setCurrentUser(loggedInUser);
+          setActiveTab('update-password');
+          try {
+            window.history.replaceState({}, '', '/update-password' + window.location.hash);
+          } catch (e) {
+            console.warn("Failed to replace state in recovery:", e);
+          }
+          
+          await syncUserProfile(user.id, user.email || '', fullName, checkedRole);
+          return;
+        }
+
         if ((event === 'SIGNED_IN' || event === 'USER_UPDATED') && session?.user) {
           const user = session.user;
           const rawRole = user.user_metadata?.role || 'citizen';
@@ -432,9 +505,13 @@ export default function App() {
 
           setCurrentUser(loggedInUser);
           
-          // Switch tab only if we are still on public views
+          // Switch tab only if we are still on public views and not on recovery
           setActiveTab(prev => {
-            if (prev === 'landing' || prev === 'login') {
+            if (prev === 'update-password' || pathNormalized === '/update-password') {
+              return 'update-password';
+            }
+
+            if ((prev === 'landing' || prev === 'login') && pathNormalized !== '/update-password') {
               return checkedRole;
             }
             return prev;
@@ -619,6 +696,7 @@ export default function App() {
             email: item.email || '',
             password: '',
             role: item.role || 'citizen',
+            points: item.points || 0,
             createdAt: item.created_at || new Date().toISOString()
           }));
 
@@ -666,6 +744,7 @@ export default function App() {
                 email: newUser.email || '',
                 password: '',
                 role: newUser.role || 'citizen',
+                points: newUser.points || 0,
                 createdAt: newUser.created_at || new Date().toISOString()
               };
               return [...prev, mapped];
@@ -678,7 +757,8 @@ export default function App() {
                   ...x,
                   fullName: updatedUser.full_name || x.fullName,
                   email: updatedUser.email || x.email,
-                  role: updatedUser.role || x.role
+                  role: updatedUser.role || x.role,
+                  points: updatedUser.points !== undefined ? updatedUser.points : x.points
                 };
               }
               return x;
@@ -1426,7 +1506,7 @@ export default function App() {
 
          {activeTab === 'citizen' && (
            currentUser && currentUser.role === 'citizen' ? (
-             <CitizenHub currentUser={currentUser} 
+             <CitizenHub currentUser={currentUser} allProfiles={mockUserDatabase} 
                issues={issues}
                handleReportIssue={handleReportIssue}
                isAnalyzing={isAnalyzing}

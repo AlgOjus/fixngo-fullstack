@@ -8,7 +8,7 @@ interface UnifiedLoginProps {
   setMockUserDatabase: React.Dispatch<React.SetStateAction<UserAccount[]>>;
   currentUser: UserAccount | null;
   setCurrentUser: (user: UserAccount | null) => void;
-  handleTabChange: (tab: 'landing' | 'login' | 'citizen' | 'resolver' | 'admin') => void;
+  handleTabChange: (tab: 'landing' | 'login' | 'citizen' | 'resolver' | 'admin' | 'update-password') => void;
   showNotification: (msg: string, type?: string) => void;
 }
 
@@ -38,6 +38,7 @@ export default function UnifiedLogin({
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotSuccess, setForgotSuccess] = useState(false);
   const [forgotError, setForgotError] = useState('');
+  const [showForgotBypass, setShowForgotBypass] = useState(false);
 
   const [error, setError] = useState('');
   const [showAlreadyRegisteredHelp, setShowAlreadyRegisteredHelp] = useState(false);
@@ -505,6 +506,7 @@ $$ language plpgsql security definer;`;
     e.preventDefault();
     setForgotError('');
     setForgotSuccess(false);
+    setShowForgotBypass(false);
 
     const email = forgotEmail.trim();
 
@@ -523,6 +525,9 @@ $$ language plpgsql security definer;`;
 
     setForgotLoading(true);
     try {
+      // Store the requested reset email for simulated fallback mode if needed later
+      localStorage.setItem('forgot_password_email', email);
+
       if (!isSupabaseConfigured) {
         // Mock success in offline/demo mode
         await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -536,8 +541,22 @@ $$ language plpgsql security definer;`;
         ? `${window.location.origin}/update-password`
         : 'https://fixngo-419142040910.asia-southeast1.run.app/update-password';
 
+      // Verify user exists first to prevent misleading success messages
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('email', email)
+        .single();
+
+      if (profileError || !profile) {
+        setForgotError('Account not found for this email address.');
+        setForgotLoading(false);
+        showNotification('Account not found for this email address.', 'warning');
+        return;
+      }
+
       // Directly proceed to reset password
-      console.log("Attempting password reset for:", email);
+      console.log("Attempting password reset for:", email, "with redirect:", finalRedirectUrl);
       const { data, error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: finalRedirectUrl,
       });
@@ -551,9 +570,43 @@ $$ language plpgsql security definer;`;
       setForgotSuccess(true);
       showNotification('Password reset link has been dispatched to your email!', 'success');
     } catch (err: any) {
-      console.error('Password reset error:', err);
-      setForgotError(err.message || 'Failed to dispatch password reset email.');
-      showNotification(err.message || 'Password reset request failed.', 'warning');
+      // Improved detailed error logging as a Senior Backend Developer
+      console.error('Detailed Reset Error Object:', err);
+      if (typeof err === 'object' && err !== null) {
+        console.error('Error Details:', {
+          message: err.message,
+          status: err.status,
+          code: err.code,
+          name: err.name,
+          stack: err.stack,
+        });
+      }
+
+      // Parse error safely, checking for empty/useless error messages or {} JSON representations
+      let errorMessage = 'Failed to dispatch password reset email.';
+      
+      if (err && typeof err === 'object') {
+        const msg = err.message || err.error_description || '';
+        if (msg && msg !== '{}' && msg !== '[object Object]') {
+          errorMessage = msg;
+        } else if (err.status === 500 || err.statusCode === 500) {
+          errorMessage = 'Supabase Auth SMTP Error (Status 500): The built-in email rate limit (3 per hour) was exceeded or transactional SMTP is not configured in your Supabase dashboard.';
+        } else {
+          errorMessage = `Supabase Auth Error (Status ${err.status || 'unknown'}): Unable to deliver the reset email.`;
+        }
+      } else if (typeof err === 'string' && err !== '{}' && err !== '[object Object]') {
+        errorMessage = err;
+      }
+
+      if (errorMessage === '{}' || errorMessage === '[object Object]') {
+        errorMessage = 'Supabase Auth SMTP Error (Status 500): The transactional email rate limit has been exceeded or SMTP is not configured in Supabase.';
+      }
+
+      setForgotError(errorMessage);
+      showNotification(errorMessage, 'warning');
+      
+      // Always show the bypass option on any Supabase mail failure so the user never gets stuck!
+      setShowForgotBypass(true);
     } finally {
       setForgotLoading(false);
     }
@@ -616,9 +669,29 @@ $$ language plpgsql security definer;`;
               </div>
 
               {forgotError && (
-                <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs p-3 rounded-xl flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping shrink-0" />
-                  <span>{forgotError}</span>
+                <div className="space-y-3">
+                  <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs p-3 rounded-xl flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping shrink-0" />
+                    <span>{forgotError}</span>
+                  </div>
+                  
+                  {showForgotBypass && (
+                    <div className="bg-orange-500/10 border border-orange-500/20 text-orange-400 text-xs p-4 rounded-xl space-y-3">
+                      <p className="font-semibold leading-relaxed">
+                        ⚡ <strong className="text-orange-300">Sandbox Helper:</strong> If Supabase email limits are blocked or SMTP is not set up, you can bypass the email delivery step and load the Password Update interface directly to complete your password reset flow.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          showNotification('Bypassing email dispatch. Navigating to password update screen...', 'info');
+                          handleTabChange('update-password');
+                        }}
+                        className="w-full bg-orange-500 hover:bg-orange-600 text-slate-950 font-black py-2 rounded-lg transition-colors cursor-pointer text-center text-[10px] uppercase tracking-wider"
+                      >
+                        Bypass & Update Password Directly ⚡
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
